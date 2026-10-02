@@ -20,11 +20,12 @@
 
 ## Сборка
 
-Откройте на GitHub вкладку Actions, выберите
-`Build legacy v2rayA for GL-MT3600BE` и запустите workflow. Его артефакт
-содержит один `.ipk` для `aarch64_cortex-a53`.
+После push в `legacy-2.2.7.5-memfix` workflow
+`Build and release legacy v2rayA` собирает девять архитектур и публикует
+Releases, если все сборки и проверки успешны. Можно также запустить его
+вручную из Actions. Пакет вашего устройства — `aarch64_cortex-a53`.
 
-При установленном Go 1.21 тот же пакет можно собрать локально:
+При установленном Go 1.21.13 тот же пакет можно собрать локально:
 
 ```sh
 bash scripts/build-standalone-ipk.sh
@@ -66,7 +67,21 @@ tar -czf /root/v2raya-rollback-2.2.7.4/config-and-db.tar.gz \
 
 ## Установка
 
-Скопируйте собранный `.ipk` в `/tmp`, затем:
+Первоначальный IPK уже проверен пользователем на этом роутере. Для
+установки опубликованного релиза файлы с ПК передавать не требуется:
+
+```sh
+wget -O /tmp/install-v2raya-release.sh \
+    https://github.com/DragonSavA/v2raya-openwrt/releases/latest/download/install-release.sh &&
+sh /tmp/install-v2raya-release.sh
+```
+
+Если `2.2.7.5-r2` уже установлена, скрипт не повторяет обновление.
+Для явной переустановки используйте `--reinstall`. Скрипт сам сохраняет
+резервную копию и прежнее состояние сервиса; подробности и откат описаны
+в [INSTALL-RU.md](INSTALL-RU.md).
+
+Ручная установка локально собранного `.ipk` остаётся возможной:
 
 ```sh
 opkg install /tmp/v2raya_2.2.7.5-r2_aarch64_cortex-a53.ipk
@@ -94,11 +109,12 @@ logread -e v2raya
 
 ## Наблюдение за памятью
 
-Скопируйте `scripts/router-memory-monitor.sh` на роутер и запустите:
+Скачайте монитор прямо с роутера и запустите:
 
 ```sh
-chmod +x /tmp/router-memory-monitor.sh
-nohup /tmp/router-memory-monitor.sh 60 /root/v2raya-memory.csv \
+wget -O /tmp/router-memory-monitor.sh \
+    https://raw.githubusercontent.com/DragonSavA/v2raya-openwrt/legacy-2.2.7.5-memfix/scripts/router-memory-monitor.sh
+nohup sh /tmp/router-memory-monitor.sh 60 /root/v2raya-memory.csv \
     >/tmp/v2raya-memory-monitor.log 2>&1 &
 echo $! >/tmp/v2raya-memory-monitor.pid
 ```

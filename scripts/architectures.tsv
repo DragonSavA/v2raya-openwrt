@@ -1,0 +1,10 @@
+# opkg_arch	GOARCH	GOARM	GOMIPS	GO386	test_status
+aarch64_cortex-a53	arm64	-	-	-	router-tested
+aarch64_generic	arm64	-	-	-	build-only
+aarch64_cortex-a72	arm64	-	-	-	build-only
+arm_cortex-a7_neon-vfpv4	arm	7	-	-	build-only
+arm_cortex-a9_vfpv3-d16	arm	7	-	-	build-only
+mips_24kc	mips	-	softfloat	-	build-only
+mipsel_24kc	mipsle	-	softfloat	-	build-only
+mipsel_74kc	mipsle	-	softfloat	-	build-only
+x86_64	amd64	-	-	-	build-only

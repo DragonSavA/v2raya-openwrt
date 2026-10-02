@@ -1,40 +1,123 @@
-name: Build legacy v2rayA for GL-MT3600BE
+name: Build and release legacy v2rayA
 
 on:
   workflow_dispatch:
   push:
-    paths:
-      - ".github/workflows/multi-arch-build.yml"
-      - "scripts/build-standalone-ipk.sh"
-      - "scripts/verify-ipk.sh"
-      - "v2raya/**"
+    branches:
+      - legacy-2.2.7.5-memfix
+  pull_request:
+    branches:
+      - legacy-2.2.7.5-memfix
 
 permissions:
   contents: read
 
+concurrency:
+  group: legacy-v2raya-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
-    name: Build aarch64_cortex-a53 package
-    runs-on: ubuntu-latest
-
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      architectures: ${{ steps.matrix.outputs.architectures }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+      - name: Check shell syntax and installer scenarios
+        run: |
+          bash -n scripts/build-standalone-ipk.sh scripts/verify-ipk.sh scripts/prepare-release.sh scripts/package-config.sh
+          sh -n scripts/install-release.sh
+          python3 scripts/tests/test-install-release.py
+          if command -v busybox >/dev/null 2>&1; then
+            INSTALL_TEST_SHELL='busybox ash' INSTALL_TEST_BUSYBOX="$(command -v busybox)" python3 scripts/tests/test-install-release.py
+          fi
+      - name: Read supported architectures
+        id: matrix
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          rows = [line.split('\t') for line in Path('scripts/architectures.tsv').read_text().splitlines()
+                  if line and not line.startswith('#')]
+          assert rows and all(len(row) == 6 for row in rows)
+          arches = [row[0] for row in rows]
+          assert len(arches) == len(set(arches))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('architectures=' + json.dumps(arches) + '\n')
+          PY
 
-      - name: Set up Go 1.21
+  build:
+    needs: prepare
+    name: Build ${{ matrix.architecture }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: ${{ fromJSON(needs.prepare.outputs.architectures) }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up the pinned legacy Go toolchain
         uses: actions/setup-go@v6
         with:
-          go-version: "1.21.x"
-          cache-dependency-path: v2raya/Makefile
-
+          go-version: "1.21.13"
+          cache-dependency-path: scripts/package-config.sh
       - name: Build and verify package
-        run: bash scripts/build-standalone-ipk.sh
-
+        run: bash scripts/build-standalone-ipk.sh "$PACKAGE_ARCH"
+        env:
+          PACKAGE_ARCH: ${{ matrix.architecture }}
       - name: Store package
         uses: actions/upload-artifact@v5
         with:
-          name: v2raya-2.2.7.5-r2-aarch64_cortex-a53
+          name: v2raya-${{ matrix.architecture }}
           path: |
             artifacts/*.ipk
-            artifacts/*.sha256
+            artifacts/*.ipk.sha256
           if-no-files-found: error
+
+  release:
+    needs: [prepare, build]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/legacy-2.2.7.5-memfix'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Collect all packages
+        uses: actions/download-artifact@v5
+        with:
+          pattern: v2raya-*
+          merge-multiple: true
+          path: artifacts
+      - name: Verify the complete release and publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          source scripts/package-config.sh
+          tag="v$full_version-${GITHUB_SHA:0:12}"
+          bash scripts/prepare-release.sh artifacts "$tag" "$GITHUB_SHA"
+          {
+            printf 'Legacy v2rayA %s with the GeoIP memory fix.\n\n' "$full_version"
+            printf 'Source commit: [%s](https://github.com/%s/commit/%s).\n\n' "$GITHUB_SHA" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+            printf 'Install on the router using the instructions in [README](https://github.com/%s/blob/%s/README.md) or INSTALL-RU.md.\n\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+            printf 'Requires opkg and the legacy iptables/firewall3 environment. The core and LuCI packages come from the original feed.\n\n'
+            printf 'Device testing is reported only for GL.iNet GL-MT3600BE (aarch64_cortex-a53). Other packages have build/ELF checks only.\n\n'
+            printf 'Packages:\n'
+            awk -F '\t' '$1 == "package" { printf "- `%s` (%s)\n", $2, $7 }' artifacts/release-manifest.tsv
+          } > artifacts/release-notes.md
+          # An already published tag is left intact when this commit is rerun.
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' > artifacts/is-draft.txt; then
+            if grep -qx false artifacts/is-draft.txt; then
+              echo "Release $tag is already published; nothing to replace."
+              exit 0
+            fi
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "v2rayA $full_version legacy (${GITHUB_SHA:0:12})" \
+              --notes-file artifacts/release-notes.md --draft
+          fi
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber \
+            artifacts/*.ipk artifacts/*.ipk.sha256 artifacts/SHA256SUMS \
+            artifacts/release-manifest.tsv artifacts/install-release.sh \
+            artifacts/architectures.tsv artifacts/INSTALL-RU.md
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest \
+            --notes-file artifacts/release-notes.md

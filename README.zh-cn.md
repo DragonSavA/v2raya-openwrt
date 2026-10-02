@@ -1,5 +1,9 @@
 # v2raya-openwrt
 
+> This legacy fork publishes `2.2.7.5-r2` replacement packages in GitHub
+> Releases. Follow [README.md](README.md) for this fork's complete installation;
+> the original-feed instructions below alone do not install the memory fix.
+
 适用于 OpenWrt 用户的 v2rayA opkg 软件源。
 
 [English](README.md)

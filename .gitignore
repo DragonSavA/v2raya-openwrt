@@ -1,1 +1,3 @@
 /artifacts/
+/build-logs/
+__pycache__/

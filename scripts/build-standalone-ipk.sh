@@ -2,17 +2,21 @@
 
 set -euo pipefail
 
-readonly package_version="2.2.7.5"
-readonly package_release="2"
-readonly package_arch="aarch64_cortex-a53"
-readonly source_hash="d0daccace51572d730fb710f7df190beed47d51ec1091d2fba38719b9417b385"
-readonly web_hash="89bff9248a9cba8b7bda6e1202ac565dbca377319423868835235deddbfb182a"
-readonly source_date_epoch="1769301139"
-
-repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+repo_root="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
+# shellcheck source=scripts/package-config.sh
+source "$repo_root/scripts/package-config.sh"
+if [[ "$#" -gt 1 ]]; then
+	printf 'Usage: %s [opkg-architecture]\n' "$0" >&2
+	exit 2
+fi
+load_architecture "${1:-aarch64_cortex-a53}"
+if [[ "$(GOTOOLCHAIN=local go env GOVERSION)" != go1.21.13 ]]; then
+	echo "Use Go 1.21.13 to preserve the tested legacy build." >&2
+	exit 1
+fi
 output_dir="${OUTPUT_DIR:-$repo_root/artifacts}"
 mkdir -p "$output_dir"
-output_dir="$(CDPATH= cd -- "$output_dir" && pwd)"
+output_dir="$(CDPATH='' cd -- "$output_dir" && pwd)"
 
 build_dir="$(mktemp -d)"
 cleanup() {
@@ -27,12 +31,19 @@ data_root="$build_dir/data"
 control_root="$build_dir/control"
 package_root="$build_dir/package"
 
-curl --fail --location --retry 3 --connect-timeout 20 \
-	"https://codeload.github.com/v2rayA/v2rayA/tar.gz/v$package_version" \
-	--output "$source_archive"
-curl --fail --location --retry 3 --connect-timeout 20 \
-	"https://github.com/v2rayA/v2rayA/releases/download/v$package_version/web.tar.gz" \
-	--output "$web_archive"
+# Optional archive directory allows offline/repeated builds with the same
+# hash-checked inputs. CI downloads directly from upstream.
+if [[ -n "${ARCHIVE_DIR:-}" ]]; then
+	cp "$ARCHIVE_DIR/v2rayA-$package_version.tar.gz" "$source_archive"
+	cp "$ARCHIVE_DIR/v2rayA-web-$package_version.tar.gz" "$web_archive"
+else
+	curl --fail --location --retry 3 --connect-timeout 20 \
+		"https://codeload.github.com/v2rayA/v2rayA/tar.gz/v$package_version" \
+		--output "$source_archive"
+	curl --fail --location --retry 3 --connect-timeout 20 \
+		"https://github.com/v2rayA/v2rayA/releases/download/v$package_version/web.tar.gz" \
+		--output "$web_archive"
+fi
 
 printf '%s  %s\n' "$source_hash" "$source_archive" | sha256sum --check -
 printf '%s  %s\n' "$web_hash" "$web_archive" | sha256sum --check -
@@ -49,8 +60,11 @@ tar --no-same-owner --strip-components=1 -xzf "$web_archive" \
 (
 	cd "$source_root/service"
 	GOTOOLCHAIN=local CGO_ENABLED=0 go test ./common/parseGeoIP
-	GOTOOLCHAIN=local GOOS=linux GOARCH=arm64 GOARM64=v8.0 CGO_ENABLED=0 \
-		go build -trimpath -buildvcs=false \
+	build_env=(GOTOOLCHAIN=local GOOS=linux "GOARCH=$go_arch" CGO_ENABLED=0 GOAMD64=v1)
+	[[ "$go_arm" == - ]] || build_env+=("GOARM=$go_arm")
+	[[ "$go_mips" == - ]] || build_env+=("GOMIPS=$go_mips")
+	[[ "$go_386" == - ]] || build_env+=("GO386=$go_386")
+	env "${build_env[@]}" go build -trimpath -buildvcs=false \
 		-ldflags "-s -w -buildid= \
 		-X github.com/v2rayA/v2rayA/conf.Version=$package_version \
 		-X github.com/v2rayA/v2rayA/core/iptables.TproxyNotSkipBr=true" \
@@ -120,7 +134,7 @@ tar --mtime="@$source_date_epoch" --owner=0 --group=0 --numeric-owner \
 	-C "$package_root" -cf - ./debian-binary ./data.tar.gz ./control.tar.gz |
 	gzip -n -9 > "$package_file"
 
-bash "$repo_root/scripts/verify-ipk.sh" "$package_file"
+bash "$repo_root/scripts/verify-ipk.sh" "$package_file" "$package_arch"
 (
 	cd "$output_dir"
 	sha256sum "$(basename -- "$package_file")" \

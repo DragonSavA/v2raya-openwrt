@@ -1,97 +1,161 @@
-# v2raya-openwrt
+# v2raya-openwrt: legacy GeoIP memory fix
 
-opkg feed of v2rayA for OpenWrt users.
+This branch provides **v2rayA 2.2.7.5-r2** for OpenWrt 21.02 and compatible
+vendor firmware using **opkg and iptables/firewall3**. It backports the
+incremental GeoIP parser from [upstream PR #1933](https://github.com/v2rayA/v2rayA/pull/1933)
+to reduce peak memory use when reading `geoip.dat`. It retains the UCI,
+procd and LuCI integration and the separately installed Xray/V2Ray core.
 
-[简体中文](README.zh-cn.md)
+[Русская инструкция: установка и откат](docs/INSTALL-RU.md) ·
+[GL-MT3600BE testing guide](docs/GL-MT3600BE-RU.md) ·
+[Download releases](https://github.com/DragonSavA/v2raya-openwrt/releases)
 
-## Legacy memory-fix branch
+The fork publishes replacement **v2raya IPKs**, not its own opkg feed.
+Install the original feed packages first, then replace only v2raya using
+the installer below. Firewall4/nftables and apk-based firmware are outside
+this legacy release's supported scope.
 
-The `legacy-2.2.7.5-memfix` branch is a deliberately narrow build for the
-GL.iNet GL-MT3600BE and compatible `aarch64_cortex-a53` OpenWrt systems. It
-keeps the existing LuCI/UCI/procd integration and external Xray core while
-updating v2rayA to 2.2.7.5 and backporting the incremental GeoIP parser from
-[v2rayA PR #1933](https://github.com/v2rayA/v2rayA/pull/1933).
+## Supported package architectures
 
-See [the Russian installation and test guide](docs/GL-MT3600BE-RU.md).
+Selection uses `opkg print-architecture`, not the router model or `uname -m`.
+The installer picks the supported architecture with the highest opkg priority.
 
-## How to install
+| opkg architecture | Go target | Device testing |
+| --- | --- | --- |
+| `aarch64_cortex-a53` | ARM64 | Reported working on GL.iNet GL-MT3600BE |
+| `aarch64_generic` | ARM64 | Build/ELF checks only |
+| `aarch64_cortex-a72` | ARM64 | Build/ELF checks only |
+| `arm_cortex-a7_neon-vfpv4` | ARMv7 | Build/ELF checks only |
+| `arm_cortex-a9_vfpv3-d16` | ARMv7 | Build/ELF checks only |
+| `mips_24kc` | MIPS32, big endian, soft float | Build/ELF checks only |
+| `mipsel_24kc` | MIPS32, little endian, soft float | Build/ELF checks only |
+| `mipsel_74kc` | MIPS32, little endian, soft float | Build/ELF checks only |
+| `x86_64` | AMD64 v1 | Build/ELF checks only |
 
-1. Add v2rayA usign key
+The GL-MT3600BE report confirms operation on that device; it does not prove
+that the memory issue is resolved under every workload. Other routers,
+including other `aarch64_cortex-a53` devices, still need functional testing.
+The kernel modules and external core must match the device's firmware.
 
-   > Make sure package `wget-ssl` or `libustream` is installed on your device
+## Clean installation of this fork's version
+
+Run these commands in an SSH shell on the router as root. Nothing needs to
+be downloaded on a PC or transferred to the router beforehand. A completed
+fork Release must exist before step 4; check the Releases link above.
+
+1. Check the environment and install an HTTPS downloader from the firmware feeds:
 
    ```sh
-   wget https://downloads.sourceforge.net/project/v2raya/openwrt/v2raya.pub -O /etc/opkg/keys/94cc2a834fb0aa03
+   opkg print-architecture
+   command -v fw3
+   opkg update
+   opkg install ca-bundle wget-ssl
    ```
 
-2. Import v2rayA feed
+   Continue with this legacy installation on firewall3 firmware only. Do not
+   change kernel-module feeds to another firmware version.
+
+2. Add the original v2rayA feed and its signing key:
 
    ```sh
-   echo "src/gz v2raya https://downloads.sourceforge.net/project/v2raya/openwrt/$(. /etc/openwrt_release && echo "$DISTRIB_ARCH")" | tee -a "/etc/opkg/customfeeds.conf"
-   ```
-
-3. Update feeds
-
-   ```sh
+   wget -O /etc/opkg/keys/94cc2a834fb0aa03 \
+     https://downloads.sourceforge.net/project/v2raya/openwrt/v2raya.pub
+   feed_arch="$(. /etc/openwrt_release && printf '%s' "$DISTRIB_ARCH")"
+   touch /etc/opkg/customfeeds.conf
+   sed -i '/^src\/gz v2raya /d' /etc/opkg/customfeeds.conf
+   printf 'src/gz v2raya https://downloads.sourceforge.net/project/v2raya/openwrt/%s\n' \
+     "$feed_arch" >> /etc/opkg/customfeeds.conf
    opkg update
    ```
 
-4. Install v2rayA and its dependencies
+3. Install the base package, core, LuCI and firewall3 dependencies:
 
    ```sh
-   opkg install v2raya
-
-   # Check your firewall implementation
-   # Install the following packages for the nftables-based firewall4 (command -v fw4)
-   # Generally speaking, install them on OpenWrt 22.03 and later
-   opkg install kmod-nft-tproxy
-   # Install the following packages for the iptables-based firewall3 (command -v fw3)
-   # Generally speaking, install them on OpenWrt 21.02 and earlier
-   opkg install iptables-mod-conntrack-extra \
-     iptables-mod-extra \
-     iptables-mod-filter \
-     iptables-mod-tproxy \
-     kmod-ipt-nat6
-
-   # Choose a core you'd like to use, v2ray or Xray
-   # If you have both installed, the latter is preferred by default
-   #
-   # Note from maintainer: due to broken tproxy support in v2ray, recommend using Xray instead
-   opkg install xray-core
-   # opkg install v2ray-core
-
-   # Optional
+   opkg install v2raya xray-core luci-app-v2raya
+   opkg install iptables-mod-conntrack-extra iptables-mod-extra \
+     iptables-mod-filter iptables-mod-tproxy kmod-ipt-nat6
+   # Optional routing data:
    # opkg install v2fly-geoip v2fly-geosite
    ```
 
-## How to use
+   Check that all these commands succeed. At this point v2raya is the
+   version supplied by the original feed, not necessarily this fork.
 
-- Method 1 - Configure via LuCI interface (for __OpenWrt 21.02 and higher__ version only)
+4. Download and run this fork's release installer:
 
-   1. Install LuCI app
+   ```sh
+   wget -O /tmp/install-v2raya-release.sh \
+     https://github.com/DragonSavA/v2raya-openwrt/releases/latest/download/install-release.sh &&
+   sh /tmp/install-v2raya-release.sh
+   ```
 
-      ```sh
-      opkg install luci-app-v2raya
-      ```
+   The installer downloads the matching IPK from a specific release tag,
+   checks its SHA-256 and package metadata, saves a persistent backup under
+   `/root/v2raya-backups/`, and installs `2.2.7.5-r2`. It warns before
+   installing an architecture without real-router testing. If the environment
+   or architecture is unsupported, it reports this and leaves the feed
+   version in place. Download/checksum errors abort before stopping the service.
+   A feed version newer than `2.2.7.5-r2` is not downgraded automatically.
 
-   2. Visit `http://<your_router_ip>/cgi-bin/luci/admin/services/v2raya` and complete setup.
+   The installer preserves the previous running/stopped and boot enablement states and sets
+   `opkg flag hold v2raya` after success, so feed upgrades do not silently
+   replace it. The package version is unchanged for rebuilds: use
+   `sh /tmp/install-v2raya-release.sh --reinstall` to install another release
+   of `2.2.7.5-r2` explicitly. Use `--check` to report availability without
+   modifying the installed package.
 
-- Method 2 - Configure via cli
+5. Confirm the installed version, then enable the service:
 
-   1. Setup v2rayA
+   ```sh
+   opkg status v2raya
+   /usr/bin/v2raya --version
+   uci set v2raya.config.enabled='1'
+   uci commit v2raya
+   /etc/init.d/v2raya enable
+   /etc/init.d/v2raya start
+   ```
 
-      ```sh
-      # For advanced usage, please see /etc/config/v2raya
-      uci set v2raya.config.enabled='1'
-      uci commit v2raya
-      ```
+   Expect `Version: 2.2.7.5-r2` in opkg status. Open
+   `http://<router-ip>/cgi-bin/luci/admin/services/v2raya` and the v2rayA
+   WebUI at `http://<router-ip>:2017`, then configure your servers and routing.
+   If step 4 reported an unsupported architecture, these commands start the
+   feed version instead; it does not contain this fork's backport.
 
-   2. Start v2rayA
+## Updating an existing installation
 
-      ```sh
-      /etc/init.d/v2raya start
-      ```
+Keep the existing feed/core/LuCI packages and run step 4 above. The installer
+preserves `/etc/config/v2raya` and `/etc/v2raya`; it stops a running service
+only after download and verification. Existing connections may disconnect
+during the upgrade. It restores the previous files and opkg record if
+installation, binary startup or basic service restart fails.
 
-   3. Visit v2rayA webUI and enjoy
+For manual rollback and post-install tests, see [INSTALL-RU.md](docs/INSTALL-RU.md).
+To allow a future feed upgrade deliberately, run `opkg flag ok v2raya`.
 
-      `http://<your_router_ip>:2017`
+## Building and publishing
+
+Every push to `legacy-2.2.7.5-memfix` runs the architecture matrix. After all
+packages pass verification, GitHub Actions publishes a Release with a
+commit-specific tag `v2.2.7.5-r2-<12-character-commit>`, all nine IPKs,
+per-package SHA-256 files, `SHA256SUMS`, a manifest, the installer and the
+Russian guide. Failed/incomplete matrices are not published. Re-running an
+already published commit leaves its release assets intact.
+
+The release job uses `GITHUB_TOKEN` with `contents: write`; no SourceForge
+credentials, SDK or separate feed signing key are required. Enable Actions
+in the fork if GitHub has disabled them. PRs build/test without publishing.
+`workflow_dispatch` also builds; publication is restricted to this branch.
+
+With **Go 1.21.13**, Bash, curl, patch, GNU tar, gzip, file and binutils:
+
+```sh
+bash scripts/build-standalone-ipk.sh mipsel_24kc
+bash scripts/verify-ipk.sh artifacts/v2raya_2.2.7.5-r2_mipsel_24kc.ipk mipsel_24kc
+python3 scripts/tests/test-install-release.py
+```
+
+Omitting the architecture builds `aarch64_cortex-a53`. The shared supported
+list is [scripts/architectures.tsv](scripts/architectures.tsv). All binaries
+use `CGO_ENABLED=0`; ARMv7 targets use `GOARM=7`, MIPS targets use
+`GOMIPS=softfloat`, and x86_64 uses `GOAMD64=v1`. No router-specific
+instructions, new libc dependencies or kernel modules are bundled.
