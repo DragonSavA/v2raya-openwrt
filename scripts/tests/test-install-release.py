@@ -24,6 +24,10 @@ args = sys.argv[1:]
 with (root / 'calls').open('a') as log:
     log.write(name + ' ' + ' '.join(args) + '\n')
 status_path = root / 'usr/lib/opkg/status'
+if name == 'id':
+    if args == ['-u']:
+        print(os.environ['TEST_UID']); sys.exit(0)
+    sys.exit(2)
 if name == 'opkg':
     if args[0] == 'status':
         text = status_path.read_text()
@@ -127,21 +131,28 @@ class InstallerTest(unittest.TestCase):
         self.write("etc/init.d/v2raya", SERVICE, executable=True)
         self.write("usr/lib/opkg/status", "Package: v2raya\nVersion: 2.2.7.4-r1\nStatus: install user installed\n\nPackage: libc\nVersion: 1\nStatus: install ok installed\n\n")
         self.write("bin/router-mock", MOCK, executable=True)
-        for command in ("opkg", "fw3", "curl", "wget", "df", "sleep"):
+        for command in ("id", "opkg", "fw3", "curl", "wget", "df", "sleep"):
             (self.root / "bin" / command).symlink_to("router-mock")
         if os.environ.get("INSTALL_TEST_BUSYBOX"):
             for command in ("awk", "tar", "sha256sum", "sed", "grep", "mktemp", "du", "wc", "uname",
-                            "cut", "tr", "date", "cp", "cat", "mkdir", "rm", "rmdir", "id", "touch"):
+                            "cut", "tr", "date", "cp", "cat", "mkdir", "rm", "rmdir", "touch"):
                 (self.root / "bin" / command).symlink_to(os.environ["INSTALL_TEST_BUSYBOX"])
         self.env = dict(os.environ, V2RAYA_TEST_ROOT=str(self.root),
                         TMPDIR=str(self.root / "tmp"),
                         PATH=str(self.root / "bin") + ":" + os.environ["PATH"],
+                        TEST_UID="0",
                         TEST_ARCHITECTURES="arch all 1\narch noarch 1\narch aarch64_cortex-a53 10",
                         TEST_RELEASE_TAG=TAG)
         self.env["TEST_INSTALLER_SCRIPT"] = str(REPO / "scripts/install-release.sh")
-        # Some BusyBox ash builds execute embedded df/sleep applets before
-        # searching PATH. Shell functions keep these two mocks hermetic.
-        self.write("bin/test-entry", '#!/bin/sh\ndf() { "$V2RAYA_TEST_ROOT/bin/df" "$@"; }\nsleep() { "$V2RAYA_TEST_ROOT/bin/sleep" "$@"; }\n. "$TEST_INSTALLER_SCRIPT"\n', executable=True)
+        # Simulate the router UID without requiring root on the test host.
+        # BusyBox ash can execute embedded applets before searching PATH;
+        # shell functions keep id/df/sleep mocked under either test shell.
+        self.write("bin/test-entry", '''#!/bin/sh
+id() { "$V2RAYA_TEST_ROOT/bin/id" "$@"; }
+df() { "$V2RAYA_TEST_ROOT/bin/df" "$@"; }
+sleep() { "$V2RAYA_TEST_ROOT/bin/sleep" "$@"; }
+. "$TEST_INSTALLER_SCRIPT"
+''', executable=True)
         self.make_release()
 
     def write(self, path, text, executable=False):
@@ -161,7 +172,7 @@ class InstallerTest(unittest.TestCase):
 
     def run_installer(self, *args, ok=True):
         shell = shlex.split(os.environ.get("INSTALL_TEST_SHELL", "/bin/sh"))
-        entry = self.root / "bin/test-entry" if os.environ.get("INSTALL_TEST_BUSYBOX") else REPO / "scripts/install-release.sh"
+        entry = self.root / "bin/test-entry"
         result = subprocess.run(shell + [str(entry), *args], env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode == 0, ok, result.stdout + result.stderr)
         return result.stdout + result.stderr
@@ -174,6 +185,13 @@ class InstallerTest(unittest.TestCase):
         self.assertNotIn("opkg install", self.calls())
         self.assertNotIn("service stop", self.calls())
         self.assertIn("2.2.7.4", (self.root / "usr/bin/v2raya").read_text())
+
+    def test_non_root_rejected_before_router_commands(self):
+        self.env["TEST_UID"] = "1000"
+        output = self.run_installer(ok=False)
+        self.assertIn("Run this script as root.", output)
+        self.assertEqual(self.calls(), "id -u\n")
+        self.assert_untouched()
 
     def test_checked_upgrade_preserves_config_and_running_service(self):
         self.write("running", "")
