@@ -1,0 +1,192 @@
+From: ALOKY <ajm1055@uomustansiriyah.edu.iq>
+Subject: [PATCH] reduce GeoIP parser memory usage
+Origin: upstream, https://github.com/v2rayA/v2rayA/pull/1933
+Status: Backport to v2rayA 2.2.7.5
+
+Decode top-level GeoIP entries incrementally and stop at the requested
+country instead of unmarshalling the complete GeoIPList. Cache successful
+results by asset path, size, modification time, and country code.
+
+The upstream author device-tested the equivalent patch against v2rayA
+2.2.7.5 on a 512 MiB aarch64 MediaTek Filogic OpenWrt router.
+The import path below is adapted to the 2.2.x source tree.
+
+diff --git a/common/parseGeoIP/parser.go b/common/parseGeoIP/parser.go
+index bd58ecc6..d80f2c2d 100644
+--- a/common/parseGeoIP/parser.go
++++ b/common/parseGeoIP/parser.go
+@@ -5,31 +5,91 @@ import (
+ 	"net"
+ 	"os"
+ 	"strings"
++	"sync"
+ 
+ 	"github.com/v2rayA/v2rayA/core/v2ray/asset"
++	"google.golang.org/protobuf/encoding/protowire"
+ 	"google.golang.org/protobuf/proto"
+ )
+ 
+-func Parser(filename string, countryCode string) ([]string, []string, error) {
+-	var ipv4List []string
+-	var ipv6List []string
+-	var geoIpProto GeoIPList
++type parserResult struct {
++	ipv4 []string
++	ipv6 []string
++}
+ 
++type parserCacheKey struct {
++	path        string
++	size        int64
++	modTime     int64
++	countryCode string
++}
++
++var parserCache sync.Map
++
++func Parser(filename string, countryCode string) ([]string, []string, error) {
+ 	realpath, err := asset.GetV2rayLocationAsset(filename)
+ 	if err != nil {
+-		return ipv4List, ipv6List, err
++		return nil, nil, err
+ 	}
++	info, err := os.Stat(realpath)
++	if err != nil {
++		return nil, nil, err
++	}
++
++	cacheKey := parserCacheKey{
++		path:        realpath,
++		size:        info.Size(),
++		modTime:     info.ModTime().UnixNano(),
++		countryCode: countryCode,
++	}
++	if cached, ok := parserCache.Load(cacheKey); ok {
++		result := cached.(parserResult)
++		return result.ipv4, result.ipv6, nil
++	}
++
+ 	data, err := os.ReadFile(realpath)
+ 	if err != nil {
+-		return ipv4List, ipv6List, err
++		return nil, nil, err
+ 	}
+ 
+-	if err := proto.Unmarshal(data, &geoIpProto); err != nil {
++	ipv4List, ipv6List, err := parseGeoIP(data, countryCode)
++	if err != nil {
+ 		return ipv4List, ipv6List, err
+ 	}
+ 
+-	for _, geo := range geoIpProto.Entry {
+-		if geo.CountryCode == countryCode {
++	parserCache.Store(cacheKey, parserResult{ipv4: ipv4List, ipv6: ipv6List})
++	return ipv4List, ipv6List, nil
++}
++
++func parseGeoIP(data []byte, countryCode string) ([]string, []string, error) {
++	var ipv4List []string
++	var ipv6List []string
++
++	// GeoIPList contains repeated GeoIP messages in field 1. Decoding the
++	// complete list expands a roughly 22 MiB asset to hundreds of MiB in
++	// memory. Decode one entry at a time and stop at the requested country.
++	for len(data) > 0 {
++		number, wireType, n := protowire.ConsumeTag(data)
++		if n < 0 {
++			return ipv4List, ipv6List, protowire.ParseError(n)
++		}
++		data = data[n:]
++
++		if number == 1 && wireType == protowire.BytesType {
++			entryData, consumed := protowire.ConsumeBytes(data)
++			if consumed < 0 {
++				return ipv4List, ipv6List, protowire.ParseError(consumed)
++			}
++			data = data[consumed:]
++
++			var geo GeoIP
++			if err := proto.Unmarshal(entryData, &geo); err != nil {
++				return ipv4List, ipv6List, err
++			}
++			if geo.CountryCode != countryCode {
++				continue
++			}
++
+ 			for _, c := range geo.Cidr {
+ 				ip := net.IP(c.Ip)
+ 				if strings.Contains(ip.String(), ":") {
+@@ -42,8 +102,15 @@ func Parser(filename string, countryCode string) ([]string, []string, error) {
+ 					ipv4List = append(ipv4List, fmt.Sprintf("%s/%d", ip.String(), c.Prefix))
+ 				}
+ 			}
+-			break
++			return ipv4List, ipv6List, nil
++		}
++
++		consumed := protowire.ConsumeFieldValue(number, wireType, data)
++		if consumed < 0 {
++			return ipv4List, ipv6List, protowire.ParseError(consumed)
+ 		}
++		data = data[consumed:]
+ 	}
++
+ 	return ipv4List, ipv6List, nil
+ }
+diff --git a/common/parseGeoIP/parser_test.go b/common/parseGeoIP/parser_test.go
+new file mode 100644
+index 00000000..ccc19736
+--- /dev/null
++++ b/common/parseGeoIP/parser_test.go
+@@ -0,0 +1,51 @@
++package parseGeoIP
++
++import (
++	"net"
++	"reflect"
++	"testing"
++
++	"google.golang.org/protobuf/proto"
++)
++
++func TestParseGeoIPStopsAtRequestedEntry(t *testing.T) {
++	data, err := proto.Marshal(&GeoIPList{Entry: []*GeoIP{
++		{
++			CountryCode: "PRIVATE",
++			Cidr: []*CIDR{
++				{Ip: net.ParseIP("10.0.0.0").To4(), Prefix: 8},
++				{Ip: net.ParseIP("198.18.0.0").To4(), Prefix: 15},
++				{Ip: net.ParseIP("2001:db8::"), Prefix: 32},
++			},
++		},
++		{
++			CountryCode: "US",
++			Cidr: []*CIDR{
++				{Ip: net.ParseIP("192.0.2.0").To4(), Prefix: 24},
++			},
++		},
++	}})
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	// A malformed record after the requested entry must not be decoded.
++	data = append(data, 0x0a, 0x02, 0xff)
++
++	ipv4, ipv6, err := parseGeoIP(data, "PRIVATE")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if want := []string{"10.0.0.0/8"}; !reflect.DeepEqual(ipv4, want) {
++		t.Fatalf("IPv4 entries = %v, want %v", ipv4, want)
++	}
++	if want := []string{"2001:db8::/32"}; !reflect.DeepEqual(ipv6, want) {
++		t.Fatalf("IPv6 entries = %v, want %v", ipv6, want)
++	}
++}
++
++func TestParseGeoIPRejectsMalformedData(t *testing.T) {
++	if _, _, err := parseGeoIP([]byte{0x0a, 0x02, 0xff}, "PRIVATE"); err == nil {
++		t.Fatal("parseGeoIP() accepted malformed data")
++	}
++}

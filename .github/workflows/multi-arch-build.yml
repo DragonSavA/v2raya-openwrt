@@ -1,146 +1,40 @@
-name: Build v2rayA feed
+name: Build legacy v2rayA for GL-MT3600BE
 
 on:
   workflow_dispatch:
-  release:
-    types:
-      - published
+  push:
+    paths:
+      - ".github/workflows/multi-arch-build.yml"
+      - "scripts/build-standalone-ipk.sh"
+      - "scripts/verify-ipk.sh"
+      - "v2raya/**"
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    name: Build packages for ${{ matrix.arch }}
+    name: Build aarch64_cortex-a53 package
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      max-parallel: 5
-      matrix:
-        include:
-          - arch: aarch64_cortex-a53
-            runtime_test: false
-          - arch: aarch64_cortex-a72
-            runtime_test: false
-          - arch: aarch64_cortex-a76
-            runtime_test: false
-          - arch: aarch64_generic
-            runtime_test: true
-          - arch: arm_arm1176jzf-s_vfp
-            runtime_test: false
-          - arch: arm_arm926ej-s
-            runtime_test: false
-          - arch: arm_cortex-a15_neon-vfpv4
-            runtime_test: true
-          - arch: arm_cortex-a5_vfpv4
-            runtime_test: false
-          - arch: arm_cortex-a7
-            runtime_test: false
-          - arch: arm_cortex-a7_neon-vfpv4
-            runtime_test: false
-          - arch: arm_cortex-a8_vfpv3
-            runtime_test: false
-          - arch: arm_cortex-a9
-            runtime_test: false
-          - arch: arm_cortex-a9_neon
-            runtime_test: false
-          - arch: arm_cortex-a9_vfpv3-d16
-            runtime_test: false
-          - arch: arm_fa526
-            runtime_test: false
-          - arch: arm_xscale
-            runtime_test: false
-          - arch: i386_pentium-mmx
-            runtime_test: true
-          - arch: i386_pentium4
-            runtime_test: false
-          - arch: loongarch64_generic
-            runtime_test: false
-          - arch: mips64_mips64r2
-            runtime_test: false
-          - arch: mips64_octeonplus
-            runtime_test: false
-          - arch: mips64el_mips64r2
-            runtime_test: false
-          - arch: mips_24kc
-            runtime_test: true
-          - arch: mips_4kec
-            runtime_test: false
-          - arch: mips_mips32
-            runtime_test: false
-          - arch: mipsel_24kc
-            runtime_test: false
-          - arch: mipsel_24kc_24kf
-            runtime_test: false
-          - arch: mipsel_74kc
-            runtime_test: false
-          - arch: mipsel_mips32
-            runtime_test: false
-          - arch: riscv64_riscv64
-            runtime_test: false
-          - arch: x86_64
-            runtime_test: true
 
     steps:
-      - uses: actions/checkout@v5
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Go 1.21
+        uses: actions/setup-go@v6
         with:
-          fetch-depth: 0
+          go-version: "1.21.x"
+          cache-dependency-path: v2raya/Makefile
 
-      - name: Build
-        uses: immortalwrt/gh-action-sdk@v7
-        env:
-          ARCH: ${{ matrix.arch }}-openwrt-24.10
-          FEEDNAME: v2raya_ci
-          PACKAGES: ca-certificates v2fly-geodata v2ray-core xray-core v2raya luci-app-v2raya
-          NO_REFRESH_CHECK: 1
-          INDEX: 1
-          KEY_BUILD: ${{ secrets.USIGN_KEY }}
-          V: s
+      - name: Build and verify package
+        run: bash scripts/build-standalone-ipk.sh
 
-      - name: Upload feed
-        uses: Pendect/action-rsyncer@9738db02560c333bf629a1533bd86ceda138e599
-        with:
-          flags: '-ahvHP'
-          options: '--delete'
-          src: 'bin/packages/${{ matrix.arch }}/v2raya_ci/'
-          dest: '${{ secrets.SF_USER }}@frs.sourceforge.net:/home/frs/project/v2raya/openwrt/${{ matrix.arch }}/'
-        env:
-          DEPLOY_KEY: ${{ secrets.SF_KEY }}
-
-      - name: Move created packages to project dir
-        run: cp bin/packages/${{ matrix.arch }}/v2raya_ci/* . || true
-
-      - name: Store packages
+      - name: Store package
         uses: actions/upload-artifact@v5
-        if: github.event_name != 'release'
         with:
-          name: ${{ matrix.arch }}-${{ github.sha }}-packages
+          name: v2raya-2.2.7.5-r2-aarch64_cortex-a53
           path: |
-            Packages
-            Packages.*
-            *.ipk
-
-      - name: Store logs
-        uses: actions/upload-artifact@v5
-        with:
-          name: ${{ matrix.arch }}-${{ github.sha }}-logs
-          path: logs/
-
-      - name: Remove logs
-        run: sudo rm -rf logs/ || true
-
-      - name: Register QEMU
-        if: ${{ matrix.runtime_test }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-user-static binfmt-support
-          sudo update-binfmts --import
-
-      - name: Build Docker container
-        if: ${{ matrix.runtime_test }}
-        run: |
-          docker build --platform linux/${{ matrix.arch }} -t test-container --build-arg ARCH .github/workflows/
-        env:
-          ARCH: ${{ matrix.arch }}-openwrt-24.10
-
-      - name: Test via Docker container
-        if: ${{ matrix.runtime_test }}
-        run: |
-          docker run --platform linux/${{ matrix.arch }} --rm -v $GITHUB_WORKSPACE:/ci test-container
+            artifacts/*.ipk
+            artifacts/*.sha256
+          if-no-files-found: error

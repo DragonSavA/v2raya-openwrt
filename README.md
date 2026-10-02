@@ -4,6 +4,16 @@ opkg feed of v2rayA for OpenWrt users.
 
 [简体中文](README.zh-cn.md)
 
+## Legacy memory-fix branch
+
+The `legacy-2.2.7.5-memfix` branch is a deliberately narrow build for the
+GL.iNet GL-MT3600BE and compatible `aarch64_cortex-a53` OpenWrt systems. It
+keeps the existing LuCI/UCI/procd integration and external Xray core while
+updating v2rayA to 2.2.7.5 and backporting the incremental GeoIP parser from
+[v2rayA PR #1933](https://github.com/v2rayA/v2rayA/pull/1933).
+
+See [the Russian installation and test guide](docs/GL-MT3600BE-RU.md).
+
 ## How to install
 
 1. Add v2rayA usign key
