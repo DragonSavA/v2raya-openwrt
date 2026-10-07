@@ -3,7 +3,7 @@
 set -euo pipefail
 
 if [[ "$#" -lt 1 || "$#" -gt 2 ]]; then
-	echo "Usage: $0 path/to/v2raya.ipk [expected-opkg-architecture]" >&2
+	echo "Usage: $0 path/to/package.ipk [expected-opkg-architecture]" >&2
 	exit 2
 fi
 
@@ -23,17 +23,24 @@ source "$repo_root/scripts/package-config.sh"
 actual_arch="$(sed -n 's/^Architecture: //p' <<< "$control")"
 load_architecture "${2:-$actual_arch}"
 
-grep -qx 'Package: v2raya' <<<"$control"
-grep -qx "Version: $full_version" <<<"$control"
+package_name="$(sed -n 's/^Package: //p' <<< "$control")"
+case "$package_name" in
+	v2raya) expected_version="$full_version"; binary_name=v2raya ;;
+	xray-core) expected_version="$xray_full_version"; binary_name=xray ;;
+	*) echo "Unexpected package: $package_name" >&2; exit 1 ;;
+esac
+grep -qx "Version: $expected_version" <<<"$control"
 grep -qx "Architecture: $package_arch" <<<"$control"
 grep -Eq '^Depends: ([^,]+, )*libc(, |$)' <<<"$control"
 grep -Eq '^Depends: .*ca-bundle' <<<"$control"
 
 data_listing="$(tar -xzOf "$package_file" ./data.tar.gz | tar -tzf -)"
-grep -qx './usr/bin/v2raya' <<<"$data_listing"
-grep -qx './etc/init.d/v2raya' <<<"$data_listing"
-grep -qx './etc/config/v2raya' <<<"$data_listing"
-grep -qx './lib/upgrade/keep.d/v2raya' <<<"$data_listing"
+grep -qx "./usr/bin/$binary_name" <<<"$data_listing"
+if [[ "$package_name" == v2raya ]]; then
+	grep -qx './etc/init.d/v2raya' <<<"$data_listing"
+	grep -qx './etc/config/v2raya' <<<"$data_listing"
+	grep -qx './lib/upgrade/keep.d/v2raya' <<<"$data_listing"
+fi
 
 if grep -Eq '^Depends: .*kmod-nft-tproxy' <<<"$control"; then
 	echo "Unexpected firewall4 dependency in legacy package" >&2
@@ -41,9 +48,9 @@ if grep -Eq '^Depends: .*kmod-nft-tproxy' <<<"$control"; then
 fi
 
 tar -xzOf "$package_file" ./data.tar.gz |
-	tar -xzf - -C "$temporary_dir" ./usr/bin/v2raya
-file "$temporary_dir/usr/bin/v2raya" | grep -q 'statically linked'
-elf_header="$(LC_ALL=C readelf -h "$temporary_dir/usr/bin/v2raya")"
+	tar -xzf - -C "$temporary_dir" "./usr/bin/$binary_name"
+file "$temporary_dir/usr/bin/$binary_name" | grep -q 'statically linked'
+elf_header="$(LC_ALL=C readelf -h "$temporary_dir/usr/bin/$binary_name")"
 case "$go_arch" in
 	arm64) machine='AArch64'; elf_class='ELF64'; byte_order='little endian' ;;
 	arm) machine='ARM'; elf_class='ELF32'; byte_order='little endian' ;;
@@ -56,9 +63,9 @@ grep -Eq "Class: +$elf_class$" <<< "$elf_header"
 grep -Eq "Machine: +$machine$" <<< "$elf_header"
 grep -Eq "Data: +2's complement, $byte_order$" <<< "$elf_header"
 grep -Eq 'Type: +EXEC ' <<< "$elf_header"
-if readelf -l "$temporary_dir/usr/bin/v2raya" | grep -q INTERP; then
+if readelf -l "$temporary_dir/usr/bin/$binary_name" | grep -q INTERP; then
 	echo "Unexpected dynamic ELF interpreter" >&2
 	exit 1
 fi
 
-echo "Verified: v2raya $full_version for $package_arch ($test_status)"
+echo "Verified: $package_name $expected_version for $package_arch ($test_status)"

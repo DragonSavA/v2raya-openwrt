@@ -1,5 +1,5 @@
 # opkg_arch	GOARCH	GOARM	GOMIPS	GO386	test_status
-aarch64_cortex-a53	arm64	-	-	-	router-tested
+aarch64_cortex-a53	arm64	-	-	-	build-only
 aarch64_generic	arm64	-	-	-	build-only
 aarch64_cortex-a72	arm64	-	-	-	build-only
 arm_cortex-a7_neon-vfpv4	arm	7	-	-	build-only

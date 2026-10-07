@@ -17,13 +17,18 @@ repository="${GITHUB_REPOSITORY:-DragonSavA/v2raya-openwrt}"
 [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
 
 manifest="$output_dir/release-manifest.tsv"
-printf 'format\t1\nrepository\t%s\nversion\t%s\ntag\t%s\nsource_commit\t%s\n' \
-	"$repository" "$full_version" "$tag" "$commit" > "$manifest"
+printf 'format\t2\nrepository\t%s\nversion\t%s\nxray_version\t%s\ntag\t%s\nsource_commit\t%s\n' \
+	"$repository" "$full_version" "$xray_full_version" "$tag" "$commit" > "$manifest"
 count=0
 while IFS=$'\t' read -r arch _; do
 	[[ -n "$arch" && "$arch" != \#* ]] || continue
 	load_architecture "$arch"
-	filename="v2raya_${full_version}_${arch}.ipk"
+	for component in v2raya xray-core; do
+	if [[ "$component" == v2raya ]]; then
+		filename="v2raya_${full_version}_${arch}.ipk"; row_type=package
+	else
+		filename="xray-core_${xray_full_version}_${arch}.ipk"; row_type=xray-core
+	fi
 	package_file="$output_dir/$filename"
 	bash "$repo_root/scripts/verify-ipk.sh" "$package_file" "$arch"
 	(cd "$output_dir" && sha256sum --check "$filename.sha256")
@@ -32,9 +37,10 @@ while IFS=$'\t' read -r arch _; do
 	installed_size="$(tar -xzOf "$package_file" ./control.tar.gz |
 		tar -xzOf - ./control | sed -n 's/^Installed-Size: //p')"
 	[[ "$installed_size" =~ ^[0-9]+$ ]]
-	printf 'package\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-		"$arch" "$filename" "$hash" "$size" "$installed_size" "$test_status" >> "$manifest"
+	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+		"$row_type" "$arch" "$filename" "$hash" "$size" "$installed_size" "$test_status" >> "$manifest"
 	count=$((count + 1))
+	done
 done < "$repo_root/scripts/architectures.tsv"
 shopt -s nullglob
 packages=("$output_dir"/*.ipk)

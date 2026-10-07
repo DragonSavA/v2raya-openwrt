@@ -1,59 +1,62 @@
-# Legacy fork progress
+# Legacy fork progress / continuation checkpoint
 
 Branch: `legacy-2.2.7.5-memfix`
+Patch base: `064365c5bbccd30febccb64cb3459f750d051627`.
+Updated: 2026-10-07.
 
-## Existing fork and device report
+## Previous published state
 
-- Original upstream baseline: `d288e54992b03365a2f6cf2e8932b5031dc2cf70`.
-- The owner applied the original patch and pushed the fork at
-  `755e9db4405269c2133542168add6dfd7b131644`.
-- The owner reports that the original `2.2.7.5-r2` IPK works correctly on
-  GL.iNet GL-MT3600BE, OpenWrt 21.02-SNAPSHOT, kernel 5.4.281,
-  `aarch64_cortex-a53`.
-- No report of a completed 24–72 hour comparative memory test is assumed.
+- The owner applied the memory backport and multi-architecture patches.
+- `2.2.7.5-r2` was reported working on GL.iNet GL-MT3600BE,
+  OpenWrt 21.02-SNAPSHOT, kernel 5.4.281, `aarch64_cortex-a53`.
+- The owner reported successful Actions/Release publication after the
+  unprivileged-runner installer test fix in commit `064365c5`.
+- Router Xray before this change: `25.10.15`.
 
-## Multi-architecture extension completed locally
+## Native Hysteria2 update
 
-- [x] Keep v2rayA version `2.2.7.5-r2`, the GeoIP backport, UCI/init/LuCI,
-  package dependencies and external core unchanged.
-- [x] One architecture table drives host builds, ELF verification and CI.
-  It contains nine opkg architectures across ARM64, ARMv7, MIPS/MIPSel and
-  x86_64; see `scripts/architectures.tsv`.
-- [x] All nine local IPK builds and their GeoIP tests passed with Go 1.21.13.
-- [x] Static ELF machine/class/endianness and build settings checked.
-- [x] `--version` passed under QEMU for ARM64, ARMv7, MIPS and MIPSel;
-  x86_64 startup passed natively. These are not real-router/network tests.
-- [x] The new `aarch64_cortex-a53` package is byte-for-byte identical to the
-  router-tested original, SHA-256
-  `bee524207972d122145c5055e1c2d22b05a6f168f53a86f18ebfec1cfd31f58c`.
-- [x] A push-triggered architecture matrix and complete-release publication
-  job are prepared, using commit-specific tags and `GITHUB_TOKEN`.
-- [x] Router installer selects from opkg priorities, pins package URLs to
-  the manifest tag, checks hashes/metadata, leaves unsupported environments
-  unchanged, backs up files/opkg state and restores on installation/startup
-  failures. It prevents automatic downgrades and preserves service state.
-- [x] Sixteen installer tests passed under `/bin/sh` and BusyBox ash with
-  BusyBox applets and mock router commands, including rollback cases.
-- [x] ShellCheck, shell syntax checks and actionlint passed.
-- [x] README and Russian installation/test/rollback guides updated.
+- [x] Bump v2raya to `2.2.7.5-r3`; retain the GeoIP memory backport,
+  legacy Go 1.21.13 build, firmware dependencies, UCI/procd/LuCI.
+- [x] Add backend patch `020-native-hysteria2-xray.patch`: URI and
+  subscription import, DB persistence, sharing, TCP/UDP native outbound,
+  Xray version guard, SNI/h3, Salamander, port ranges, S-UI bandwidth.
+- [x] Use Xray's `finalmask/quicParams` schema; do not emit obsolete
+  Hysteria bandwidth/hopping fields. Do not bypass TLS verification.
+- [x] Build unmodified Xray `26.3.27-r1` with pinned Go 1.26.8,
+  CGO disabled, for all nine existing opkg architectures.
+- [x] All 18 local IPK builds and static ELF checks passed.
+- [x] Go import/subscription/database/config tests passed.
+- [x] Real Xray config checks cover Hysteria2, Salamander/hopping/bandwidth,
+  Trojan, VLESS WS+TLS and TUIC's existing SOCKS outbound.
+- [x] Loopback TCP/UDP with trusted TLS passed for Hysteria2, Salamander,
+  Trojan and VLESS WS+TLS. Date-dependent allowInsecure rejection confirmed.
+- [x] Installer handles feed and held r2 upgrades, older/newer Xray,
+  preflight without stopping the service, paired backup/rollback,
+  architecture/checksum/metadata and service state.
+- [x] 26 installer scenarios passed under /bin/sh and BusyBox ash,
+  including core failure/rollback and non-root UID simulation.
+- [x] README and Russian installation/testing/paired-rollback guide updated.
+- [x] ShellCheck, actionlint, syntax and complete 18-package manifest passed.
+- [x] Clean patch application check completed against the exact base commit.
+- [x] Downloadable patch and memo prepared; no remote commit/push performed.
 
-## After applying the extension patch
+## Owner actions after applying the patch
 
-- [ ] Push the change to `DragonSavA/v2raya-openwrt` on the existing branch.
-- [ ] Enable Actions in the fork if necessary; wait for all nine build jobs
-  and the release job to succeed.
-- [ ] Confirm that a published Release contains all IPKs, SHA-256 files,
-  manifest, installer and Russian guide.
-- [ ] Run the release installer with `--check` on the GL-MT3600BE. An
-  explicit `--reinstall` can test the new delivery path; it is not required
-  to obtain a different binary on this router.
-- [ ] Collect real-router/network tests for other architectures and run
-  comparative memory observation. Update test status only after evidence.
+- [ ] Commit/push on the existing branch; wait for prepare, nine paired
+  build jobs, host compatibility and Release to pass.
+- [ ] Confirm 18 IPKs, checksum files, manifest format 2 and new installer.
+- [ ] Resolve incompatible saved TLS settings before updating the router.
+- [ ] Download the r3 installer afresh; run --check, then install.
+- [ ] Test the previous protocols and Hysteria2 against the real S-UI
+  servers, transparent proxy/DNS, restart/reboot, hopping and memory.
+- [ ] Record 24–72 hours of normal memory/connection behavior.
+
+No real-router r3 or S-UI server test has been performed here. TUIC's native
+client implementation is unchanged; its SOCKS link to the new core is checked.
+Hopping is validated as Xray configuration, not as real-server packet traffic.
+Inactive nodes outside the saved core config need individual tests.
 
 ## Deferred
 
-- Public opkg feed, firewall4/apk support and v2rayA 2.4.x migration.
-- Other memory/process fixes unless measurements show they are needed.
-
-This file is a continuation checkpoint. Local builds and mock/emulated
-tests do not constitute a published GitHub Actions run or device testing.
+AnyTLS, Naive, Snell, auxiliary sing-box, public opkg feed,
+firewall4/apk support and a v2rayA 2.4.x migration.

@@ -50,16 +50,17 @@ printf '%s  %s\n' "$web_hash" "$web_archive" | sha256sum --check -
 
 mkdir -p "$source_root"
 tar --no-same-owner --strip-components=1 -xzf "$source_archive" -C "$source_root"
-patch -d "$source_root/service" -p1 \
-	< "$repo_root/v2raya/patches/010-reduce-geoip-parser-memory.patch"
+for patch_file in "$repo_root"/v2raya/patches/*.patch; do
+	patch -d "$source_root/service" -p1 < "$patch_file"
+done
 
 mkdir -p "$source_root/service/server/router/web"
-tar --no-same-owner --strip-components=1 -xzf "$web_archive" \
+	tar --no-same-owner --strip-components=1 -xzf "$web_archive" \
 	-C "$source_root/service/server/router/web"
 
 (
 	cd "$source_root/service"
-	GOTOOLCHAIN=local CGO_ENABLED=0 go test ./common/parseGeoIP
+	bash "$repo_root/scripts/test-protocols.sh" "$source_root/service"
 	build_env=(GOTOOLCHAIN=local GOOS=linux "GOARCH=$go_arch" CGO_ENABLED=0 GOAMD64=v1)
 	[[ "$go_arm" == - ]] || build_env+=("GOARM=$go_arm")
 	[[ "$go_mips" == - ]] || build_env+=("GOMIPS=$go_mips")
@@ -101,7 +102,7 @@ Maintainer: Tianling Shen <cnsztl@immortalwrt.org>
 Architecture: $package_arch
 Installed-Size: $installed_size
 Description:  v2rayA is a V2Ray Linux client supporting global transparent proxy,
- compatible with SS, SSR, Trojan(trojan-go), PingTunnel protocols.
+ with a GeoIP memory backport and native Hysteria2 via Xray 26.3.27+.
 EOF
 
 printf '/etc/config/v2raya\n' > "$control_root/conffiles"

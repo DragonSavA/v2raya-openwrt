@@ -6,7 +6,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=v2rayA
 PKG_VERSION:=2.2.7.5
-PKG_RELEASE:=2
+PKG_RELEASE:=3
 
 PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/v2rayA/v2rayA/tar.gz/v$(PKG_VERSION)?
@@ -43,7 +43,7 @@ endef
 
 define Package/v2raya/description
   v2rayA is a V2Ray Linux client supporting global transparent proxy,
-  compatible with SS, SSR, Trojan(trojan-go), PingTunnel protocols.
+  with a GeoIP memory backport and native Hysteria2 via Xray 26.3.27+.
 endef
 
 define Package/v2raya/conffiles

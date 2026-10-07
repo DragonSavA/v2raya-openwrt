@@ -1,0 +1,604 @@
+diff --git a/core/coreObj/coreObj.go b/core/coreObj/coreObj.go
+index a91a926..a98e6a0 100644
+--- a/core/coreObj/coreObj.go
++++ b/core/coreObj/coreObj.go
+@@ -112,6 +112,7 @@ type Server struct {
+ 	Users    []OutboundUser `json:"users,omitempty"`
+ }
+ type Settings struct {
++	Version        int         `json:"version,omitempty"`
+ 	Vnext          interface{} `json:"vnext,omitempty"`
+ 	Servers        interface{} `json:"servers,omitempty"`
+ 	DomainStrategy string      `json:"domainStrategy,omitempty"`
+@@ -141,19 +142,46 @@ type WsSettings struct {
+ 	Headers Headers `json:"headers"`
+ }
+ type StreamSettings struct {
+-	Network         string           `json:"network,omitempty"`
+-	Security        string           `json:"security,omitempty"`
+-	TLSSettings     *TLSSettings     `json:"tlsSettings,omitempty"`
+-	XTLSSettings    *TLSSettings     `json:"xtlsSettings,omitempty"`
+-	XHTTPSettings   *XHTTPSettings   `json:"xhttpSettings,omitempty"`
+-	RealitySettings *RealitySettings `json:"realitySettings,omitempty"`
+-	TCPSettings     *TCPSettings     `json:"tcpSettings,omitempty"`
+-	KcpSettings     *KcpSettings     `json:"kcpSettings,omitempty"`
+-	WsSettings      *WsSettings      `json:"wsSettings,omitempty"`
+-	HTTPSettings    *HttpSettings    `json:"httpSettings,omitempty"`
+-	GrpcSettings    *GrpcSettings    `json:"grpcSettings,omitempty"`
+-	QuicSettings    *QuicSettings    `json:"quicSettings,omitempty"`
+-	Sockopt         *Sockopt         `json:"sockopt,omitempty"`
++	HysteriaSettings *HysteriaSettings `json:"hysteriaSettings,omitempty"`
++	FinalMask        *FinalMask        `json:"finalmask,omitempty"`
++	Network          string            `json:"network,omitempty"`
++	Security         string            `json:"security,omitempty"`
++	TLSSettings      *TLSSettings      `json:"tlsSettings,omitempty"`
++	XTLSSettings     *TLSSettings      `json:"xtlsSettings,omitempty"`
++	XHTTPSettings    *XHTTPSettings    `json:"xhttpSettings,omitempty"`
++	RealitySettings  *RealitySettings  `json:"realitySettings,omitempty"`
++	TCPSettings      *TCPSettings      `json:"tcpSettings,omitempty"`
++	KcpSettings      *KcpSettings      `json:"kcpSettings,omitempty"`
++	WsSettings       *WsSettings       `json:"wsSettings,omitempty"`
++	HTTPSettings     *HttpSettings     `json:"httpSettings,omitempty"`
++	GrpcSettings     *GrpcSettings     `json:"grpcSettings,omitempty"`
++	QuicSettings     *QuicSettings     `json:"quicSettings,omitempty"`
++	Sockopt          *Sockopt          `json:"sockopt,omitempty"`
++}
++type HysteriaSettings struct {
++	Version int    `json:"version"`
++	Auth    string `json:"auth"`
++}
++type FinalMask struct {
++	Udp        []UdpMask   `json:"udp,omitempty"`
++	QuicParams *QuicParams `json:"quicParams,omitempty"`
++}
++type UdpMask struct {
++	Type     string             `json:"type"`
++	Settings SalamanderSettings `json:"settings"`
++}
++type SalamanderSettings struct {
++	Password string `json:"password"`
++}
++type QuicParams struct {
++	Congestion string  `json:"congestion"`
++	BrutalUp   string  `json:"brutalUp,omitempty"`
++	BrutalDown string  `json:"brutalDown,omitempty"`
++	UdpHop     *UdpHop `json:"udpHop,omitempty"`
++}
++type UdpHop struct {
++	Ports    string `json:"ports"`
++	Interval int    `json:"interval"`
+ }
+ type RealitySettings struct {
+ 	ServerName  string `json:"serverName,omitempty"`
+diff --git a/core/serverObj/hysteria2.go b/core/serverObj/hysteria2.go
+new file mode 100644
+index 0000000..0a405a6
+--- /dev/null
++++ b/core/serverObj/hysteria2.go
+@@ -0,0 +1,236 @@
++package serverObj
++
++import (
++	"fmt"
++	"net"
++	"net/url"
++	"strconv"
++	"strings"
++
++	"github.com/v2rayA/v2rayA/core/coreObj"
++	"github.com/v2rayA/v2rayA/core/v2ray/where"
++)
++
++const hysteria2MinXray = "26.3.27"
++
++func init() {
++	for _, scheme := range []string{"hysteria2", "hy2"} {
++		FromLinkRegister(scheme, NewHysteria2)
++		EmptyRegister(scheme, func() (ServerObj, error) { return new(Hysteria2), nil })
++	}
++}
++
++// These fields are persisted by the existing ServerRaw/SubscriptionRaw code.
++type Hysteria2 struct {
++	Name          string `json:"name"`
++	Server        string `json:"server"`
++	Port          int    `json:"port"`
++	Protocol      string `json:"protocol"`
++	Password      string `json:"password"`
++	Sni           string `json:"sni"`
++	Alpn          string `json:"alpn,omitempty"`
++	AllowInsecure bool   `json:"allowInsecure"`
++	Obfs          string `json:"obfs,omitempty"`
++	ObfsPassword  string `json:"obfsPassword,omitempty"`
++	Ports         string `json:"ports,omitempty"`
++	UpMbps        int    `json:"upMbps,omitempty"`
++	DownMbps      int    `json:"downMbps,omitempty"`
++}
++
++func NewHysteria2(link string) (ServerObj, error) { return ParseHysteria2URL(link) }
++
++func ParseHysteria2URL(link string) (*Hysteria2, error) {
++	u, err := url.Parse(link)
++	if err != nil {
++		return nil, fmt.Errorf("invalid Hysteria2 URL")
++	}
++	if (u.Scheme != "hysteria2" && u.Scheme != "hy2") || u.Hostname() == "" || u.User == nil || (u.Path != "" && u.Path != "/") {
++		return nil, fmt.Errorf("Hysteria2 requires a server and authentication")
++	}
++	q, err := url.ParseQuery(u.RawQuery)
++	if err != nil {
++		return nil, fmt.Errorf("invalid Hysteria2 query")
++	}
++	s := &Hysteria2{
++		Name: u.Fragment, Server: u.Hostname(), Port: 443, Protocol: "hysteria2",
++		Password: u.User.Username(), Sni: q.Get("sni"), Alpn: q.Get("alpn"),
++		Obfs: strings.ToLower(q.Get("obfs")), ObfsPassword: q.Get("obfs-password"), Ports: strings.ReplaceAll(q.Get("mport"), ":", "-"),
++	}
++	if password, ok := u.User.Password(); ok {
++		s.Password += ":" + password
++	}
++	if u.Port() != "" {
++		s.Port, err = strconv.Atoi(u.Port())
++		if err != nil || s.Port < 1 || s.Port > 65535 {
++			return nil, fmt.Errorf("invalid Hysteria2 port")
++		}
++	}
++	for _, key := range []string{"insecure", "allowInsecure"} {
++		if value := q.Get(key); value != "" {
++			v, e := strconv.ParseBool(value)
++			if e != nil {
++				return nil, fmt.Errorf("invalid Hysteria2 %s value", key)
++			}
++			s.AllowInsecure = s.AllowInsecure || v
++		}
++	}
++	for key, dst := range map[string]*int{"upmbps": &s.UpMbps, "downmbps": &s.DownMbps} {
++		if value := q.Get(key); value != "" {
++			*dst, err = strconv.Atoi(value)
++			if err != nil || *dst < 0 || *dst > 1000000 {
++				return nil, fmt.Errorf("invalid Hysteria2 %s value", key)
++			}
++		}
++	}
++	// TCP Fast Open has no effect on QUIC. S-UI includes fastopen in its links.
++	// Never silently discard options that change TLS verification or routing.
++	for key := range q {
++		switch key {
++		case "sni", "alpn", "insecure", "allowInsecure", "obfs", "obfs-password", "mport", "upmbps", "downmbps", "fastopen":
++		default:
++			return nil, fmt.Errorf("unsupported Hysteria2 URL parameter: %s", key)
++		}
++	}
++	if err := s.validate(); err != nil {
++		return nil, err
++	}
++	return s, nil
++}
++
++func (s *Hysteria2) validate() error {
++	if s.Server == "" || s.Password == "" || s.Port < 1 || s.Port > 65535 {
++		return fmt.Errorf("invalid Hysteria2 server, password or port")
++	}
++	if s.Obfs != "" && s.Obfs != "salamander" {
++		return fmt.Errorf("unsupported Hysteria2 obfuscation: %s", s.Obfs)
++	}
++	if (s.Obfs == "salamander") != (s.ObfsPassword != "") {
++		return fmt.Errorf("Hysteria2 Salamander requires obfs=salamander and obfs-password")
++	}
++	if s.UpMbps < 0 || s.DownMbps < 0 || s.UpMbps > 1000000 || s.DownMbps > 1000000 {
++		return fmt.Errorf("invalid Hysteria2 bandwidth")
++	}
++	if s.Alpn != "" && s.Alpn != "h3" {
++		return fmt.Errorf("Hysteria2 requires ALPN h3")
++	}
++	if s.Ports != "" {
++		for _, part := range strings.Split(s.Ports, ",") {
++			rangeParts := strings.Split(part, "-")
++			if len(rangeParts) < 1 || len(rangeParts) > 2 {
++				return fmt.Errorf("invalid Hysteria2 port hopping range")
++			}
++			previous := 0
++			for _, port := range rangeParts {
++				p, err := strconv.Atoi(port)
++				if err != nil || p < 1 || p > 65535 || p < previous {
++					return fmt.Errorf("invalid Hysteria2 port hopping range")
++				}
++				previous = p
++			}
++		}
++	}
++	return nil
++}
++
++func xrayAtLeastHysteria2(version string) bool {
++	fields := strings.Split(strings.TrimPrefix(version, "v"), ".")
++	if len(fields) != 3 {
++		return false
++	}
++	minimum := []int{26, 3, 27}
++	for i, field := range fields {
++		v, err := strconv.Atoi(field)
++		if err != nil || v < 0 {
++			return false
++		}
++		if v != minimum[i] {
++			// Validate the remaining fields even when the prefix is newer.
++			for _, rest := range fields[i+1:] {
++				if n, e := strconv.Atoi(rest); e != nil || n < 0 {
++					return false
++				}
++			}
++			return v > minimum[i]
++		}
++	}
++	return true
++}
++
++func (s *Hysteria2) Configuration(info PriorInfo) (Configuration, error) {
++	if info.Variant != where.Xray || !xrayAtLeastHysteria2(info.CoreVersion) {
++		return Configuration{}, fmt.Errorf("Hysteria2 requires native Xray %s or newer; run the fork release installer and select /usr/bin/xray", hysteria2MinXray)
++	}
++	if err := s.validate(); err != nil {
++		return Configuration{}, err
++	}
++	if s.AllowInsecure {
++		return Configuration{}, fmt.Errorf("Xray %s does not support Hysteria2 insecure=1; use a trusted TLS certificate and matching SNI, then reimport a link with insecure=0", hysteria2MinXray)
++	}
++	sni := s.Sni
++	if sni == "" {
++		sni = s.Server
++	}
++	stream := &coreObj.StreamSettings{
++		Network: "hysteria", Security: "tls",
++		TLSSettings:      &coreObj.TLSSettings{ServerName: sni, Alpn: []string{"h3"}},
++		HysteriaSettings: &coreObj.HysteriaSettings{Version: 2, Auth: s.Password},
++	}
++	if s.Obfs != "" || s.Ports != "" || s.UpMbps != 0 || s.DownMbps != 0 {
++		stream.FinalMask = &coreObj.FinalMask{}
++		if s.Obfs != "" {
++			stream.FinalMask.Udp = []coreObj.UdpMask{{Type: "salamander", Settings: coreObj.SalamanderSettings{Password: s.ObfsPassword}}}
++		}
++		if s.Ports != "" || s.UpMbps != 0 || s.DownMbps != 0 {
++			params := &coreObj.QuicParams{Congestion: "bbr"}
++			if s.UpMbps != 0 || s.DownMbps != 0 {
++				params.Congestion = "brutal"
++				if s.UpMbps != 0 {
++					// S-UI uses decimal Mbps; Xray's "mbps" unit uses 1024^2.
++					params.BrutalUp = fmt.Sprintf("%d bps", int64(s.UpMbps)*1000000)
++				}
++				if s.DownMbps != 0 {
++					params.BrutalDown = fmt.Sprintf("%d bps", int64(s.DownMbps)*1000000)
++				}
++			}
++			if s.Ports != "" {
++				params.UdpHop = &coreObj.UdpHop{Ports: s.Ports, Interval: 30}
++			}
++			stream.FinalMask.QuicParams = params
++		}
++	}
++	return Configuration{
++		CoreOutbound: coreObj.OutboundObject{
++			Tag: info.Tag, Protocol: "hysteria",
++			Settings:       coreObj.Settings{Version: 2, Address: s.Server, Port: s.Port},
++			StreamSettings: stream,
++		},
++		UDPSupport: true,
++	}, nil
++}
++
++func (s *Hysteria2) ExportToURL() string {
++	u := &url.URL{Scheme: "hysteria2", User: url.User(s.Password), Host: net.JoinHostPort(s.Server, strconv.Itoa(s.Port)), Fragment: s.Name}
++	q := url.Values{}
++	for key, value := range map[string]string{"sni": s.Sni, "alpn": s.Alpn, "obfs": s.Obfs, "obfs-password": s.ObfsPassword, "mport": s.Ports} {
++		setValue(&q, key, value)
++	}
++	if s.AllowInsecure {
++		q.Set("insecure", "1")
++	}
++	if s.UpMbps != 0 {
++		q.Set("upmbps", strconv.Itoa(s.UpMbps))
++	}
++	if s.DownMbps != 0 {
++		q.Set("downmbps", strconv.Itoa(s.DownMbps))
++	}
++	u.RawQuery = q.Encode()
++	return u.String()
++}
++
++func (s *Hysteria2) NeedPluginPort() bool { return false }
++func (s *Hysteria2) ProtoToShow() string  { return "hysteria2" }
++func (s *Hysteria2) GetProtocol() string  { return "hysteria2" }
++func (s *Hysteria2) GetHostname() string  { return s.Server }
++func (s *Hysteria2) GetPort() int         { return s.Port }
++func (s *Hysteria2) GetName() string      { return s.Name }
++func (s *Hysteria2) SetName(name string)  { s.Name = name }
+diff --git a/core/serverObj/hysteria2_test.go b/core/serverObj/hysteria2_test.go
+new file mode 100644
+index 0000000..ce47c2e
+--- /dev/null
++++ b/core/serverObj/hysteria2_test.go
+@@ -0,0 +1,111 @@
++package serverObj
++
++import (
++	"encoding/json"
++	"strings"
++	"testing"
++
++	"github.com/v2rayA/v2rayA/core/v2ray/where"
++)
++
++func TestHysteria2SUIAndExport(t *testing.T) {
++	link := "hysteria2://user%3Ap%40ss%2B%25@[2001:db8::1]:443/?sni=proxy.example&alpn=h3&obfs=salamander&obfs-password=secret%2B%25&mport=443,10000-10010&upmbps=20&downmbps=80&fastopen=0#S-UI%20H2"
++	s, err := ParseHysteria2URL(link)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if s.Password != "user:p@ss+%" || s.Server != "2001:db8::1" || s.Name != "S-UI H2" {
++		t.Fatalf("credentials/IPv6/name decoding failed")
++	}
++	obj, err := NewFromLink("hysteria2", s.ExportToURL())
++	if err != nil {
++		t.Fatal(err)
++	}
++	if *obj.(*Hysteria2) != *s {
++		t.Fatal("sharing URL lost Hysteria2 options")
++	}
++	c, err := s.Configuration(PriorInfo{Variant: where.Xray, CoreVersion: "26.3.27", Tag: "hy2"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if c.CoreOutbound.Protocol != "hysteria" || c.CoreOutbound.Settings.Version != 2 || c.PluginChain != "" || s.NeedPluginPort() || !c.UDPSupport {
++		t.Fatal("expected a native TCP/UDP Hysteria2 outbound without a plugin")
++	}
++	b, err := json.Marshal(c.CoreOutbound)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var config map[string]interface{}
++	if err = json.Unmarshal(b, &config); err != nil {
++		t.Fatal(err)
++	}
++	stream := config["streamSettings"].(map[string]interface{})
++	params := stream["finalmask"].(map[string]interface{})["quicParams"].(map[string]interface{})
++	if params["brutalUp"] != "20000000 bps" || params["brutalDown"] != "80000000 bps" || params["congestion"] != "brutal" {
++		t.Fatal("S-UI bandwidth mapped incorrectly")
++	}
++	if _, ok := stream["hysteriaSettings"].(map[string]interface{})["up"]; ok {
++		t.Fatal("obsolete Xray Hysteria bandwidth settings emitted")
++	}
++}
++
++func TestHysteria2AliasDefaultAndAuth(t *testing.T) {
++	for _, link := range []string{"hy2://user:password@proxy.example", "hysteria2://user%3Apassword@proxy.example:443"} {
++		s, err := ParseHysteria2URL(link)
++		if err != nil {
++			t.Fatal(err)
++		}
++		if s.Password != "user:password" || s.Port != 443 || s.GetProtocol() != "hysteria2" {
++			t.Fatal("auth/default port/alias")
++		}
++		c, err := s.Configuration(PriorInfo{Variant: where.Xray, CoreVersion: "26.3.27"})
++		if err != nil {
++			t.Fatal(err)
++		}
++		if c.CoreOutbound.StreamSettings.TLSSettings.ServerName != "proxy.example" {
++			t.Fatal("missing SNI fallback")
++		}
++		if c.CoreOutbound.StreamSettings.FinalMask != nil {
++			t.Fatal("unneeded finalmask")
++		}
++	}
++}
++
++func TestHysteria2CoreAndTLSGuard(t *testing.T) {
++	s, _ := ParseHysteria2URL("hy2://password@proxy.example:443")
++	for _, info := range []PriorInfo{{Variant: where.V2ray, CoreVersion: "99.1.1"}, {Variant: where.Xray, CoreVersion: "25.10.15"}, {Variant: where.Xray, CoreVersion: "26.3.26"}, {Variant: where.Xray, CoreVersion: "26.4.bad"}} {
++		if _, err := s.Configuration(info); err == nil {
++			t.Fatalf("accepted incompatible core: %v", info)
++		}
++	}
++	for _, version := range []string{"26.3.27", "v26.3.27", "26.10.1", "27.1.1"} {
++		if _, err := s.Configuration(PriorInfo{Variant: where.Xray, CoreVersion: version}); err != nil {
++			t.Fatal(err)
++		}
++	}
++	for _, flag := range []string{"insecure=1", "insecure=true", "allowInsecure=1", "allowInsecure=true"} {
++		s, err := ParseHysteria2URL("hy2://password@proxy.example:443?" + flag)
++		if err != nil {
++			t.Fatal(err)
++		}
++		if !s.AllowInsecure {
++			t.Fatal("unsafe TLS flag silently ignored")
++		}
++		if _, err = s.Configuration(PriorInfo{Variant: where.Xray, CoreVersion: "26.3.27"}); err == nil || !strings.Contains(err.Error(), "trusted TLS") {
++			t.Fatal("missing actionable TLS error")
++		}
++	}
++}
++
++func TestHysteria2RejectsUnsupportedOrInvalidOptions(t *testing.T) {
++	for _, suffix := range []string{"?obfs=unknown", "?obfs=salamander", "?obfs-password=x", "?insecure=maybe", "?alpn=h2", "?upmbps=-1", "?downmbps=bad", "?pinSHA256=x", "?mport=0", "?mport=65536", "?mport=10-1", "?mport=1,,2", "?sni=%ZZ", "/other/path"} {
++		if _, err := ParseHysteria2URL("hy2://password@proxy.example:443" + suffix); err == nil {
++			t.Fatalf("accepted invalid/unsupported URL suffix: %s", suffix)
++		}
++	}
++	for _, link := range []string{"hy2://proxy.example:443", "hy2://@proxy.example:443", "hy2://password@:443", "hy2://password@proxy.example:65536", "hysteria://password@proxy.example:443"} {
++		if _, err := ParseHysteria2URL(link); err == nil {
++			t.Fatal("accepted invalid URL")
++		}
++	}
++}
+diff --git a/core/serverObj/xray_native_test.go b/core/serverObj/xray_native_test.go
+new file mode 100644
+index 0000000..6b3d3e6
+--- /dev/null
++++ b/core/serverObj/xray_native_test.go
+@@ -0,0 +1,58 @@
++package serverObj
++
++import (
++	"encoding/json"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strconv"
++	"strings"
++	"testing"
++
++	"github.com/v2rayA/v2rayA/core/v2ray/where"
++)
++
++// The host CI job uses the newly built Xray, rather than only inspecting JSON.
++func TestNativeXrayConfigCompatibility(t *testing.T) {
++	xray := os.Getenv("XRAY_BIN")
++	if xray == "" {
++		t.Skip("XRAY_BIN is required for Xray integration checks")
++	}
++	links := []string{
++		"trojan://password@proxy.example:443?sni=proxy.example&type=tcp&allowInsecure=false",
++		"vless://11111111-1111-4111-8111-111111111111@proxy.example:443?type=ws&security=tls&sni=proxy.example&host=proxy.example&path=%2Fws&encryption=none",
++		"tuic://11111111-1111-4111-8111-111111111111:password@proxy.example:443?alpn=h3&congestion_control=bbr",
++		"hysteria2://password@proxy.example:443?sni=proxy.example",
++		"hy2://password@proxy.example:443?sni=proxy.example&obfs=salamander&obfs-password=secret&upmbps=20&downmbps=80&mport=443,10000-10010",
++	}
++	for i, link := range links {
++		scheme := strings.SplitN(link, ":", 2)[0]
++		obj, err := NewFromLink(scheme, link)
++		if err != nil {
++			t.Fatal(err)
++		}
++		c, err := obj.Configuration(PriorInfo{Variant: where.Xray, CoreVersion: "26.3.27", Tag: "proxy", PluginPort: 41001})
++		if err != nil {
++			t.Fatal(err)
++		}
++		b, err := json.Marshal(map[string]interface{}{"outbounds": []interface{}{c.CoreOutbound}})
++		if err != nil {
++			t.Fatal(err)
++		}
++		file := filepath.Join(t.TempDir(), "config.json")
++		if err = os.WriteFile(file, b, 0600); err != nil {
++			t.Fatal(err)
++		}
++		if out, err := exec.Command(xray, "run", "-test", "-config", file).CombinedOutput(); err != nil {
++			t.Fatalf("Xray rejected %s fixture %d: %v\n%s", scheme, i, err, out)
++		}
++		if output := os.Getenv("XRAY_FIXTURE_DIR"); output != "" {
++			if err = os.MkdirAll(output, 0700); err != nil {
++				t.Fatal(err)
++			}
++			if err = os.WriteFile(filepath.Join(output, "outbound-"+strconv.Itoa(i)+".json"), b, 0600); err != nil {
++				t.Fatal(err)
++			}
++		}
++	}
++}
+diff --git a/db/configure/hysteria2_test.go b/db/configure/hysteria2_test.go
+new file mode 100644
+index 0000000..a997960
+--- /dev/null
++++ b/db/configure/hysteria2_test.go
+@@ -0,0 +1,38 @@
++package configure
++
++import (
++	"encoding/json"
++	"testing"
++
++	"github.com/v2rayA/v2rayA/core/serverObj"
++)
++
++func TestHysteria2StoredServerAndSubscription(t *testing.T) {
++	obj, err := serverObj.NewFromLink("hy2", "hy2://p%40ss@proxy.example:443?obfs=salamander&obfs-password=test&mport=443,5000-5010#node")
++	if err != nil {
++		t.Fatal(err)
++	}
++	raw := &ServerRaw{ServerObj: obj}
++	b, err := json.Marshal(raw)
++	if err != nil {
++		t.Fatal(err)
++	}
++	loaded, err := Bytes2ServerRaw(b)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if loaded.ServerObj.ExportToURL() != obj.ExportToURL() {
++		t.Fatal("database round trip lost Hysteria2 options")
++	}
++	b, err = json.Marshal(SubscriptionRaw{Servers: []ServerRaw{*raw}})
++	if err != nil {
++		t.Fatal(err)
++	}
++	sub, err := Bytes2SubscriptionRaw(b)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(sub.Servers) != 1 || sub.Servers[0].ServerObj.ExportToURL() != obj.ExportToURL() {
++		t.Fatal("subscription database round trip")
++	}
++}
+diff --git a/server/service/hysteria2_test.go b/server/service/hysteria2_test.go
+new file mode 100644
+index 0000000..a236e98
+--- /dev/null
++++ b/server/service/hysteria2_test.go
+@@ -0,0 +1,46 @@
++package service
++
++import (
++	"encoding/base64"
++	"net/http"
++	"net/http/httptest"
++	"testing"
++
++	"github.com/v2rayA/v2rayA/db"
++	"github.com/v2rayA/v2rayA/db/configure"
++)
++
++func TestHysteria2PlainAndBase64Subscription(t *testing.T) {
++	links := "hysteria2://password@proxy.example:443?sni=proxy.example&fastopen=0#first\nhy2://other@[2001:db8::1]:8443#second\n"
++	servers, _, err := ResolveByLines(links)
++	if err != nil || len(servers) != 2 {
++		t.Fatalf("plain subscription: servers=%d, err=%v", len(servers), err)
++	}
++	for _, srv := range servers {
++		if srv.GetProtocol() != "hysteria2" {
++			t.Fatal("incorrect protocol")
++		}
++	}
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		_, _ = w.Write([]byte(base64.StdEncoding.EncodeToString([]byte(links))))
++	}))
++	defer srv.Close()
++	servers, _, err = ResolveSubscriptionWithClient(srv.URL, srv.Client())
++	if err != nil || len(servers) != 2 {
++		t.Fatalf("base64 subscription: servers=%d, err=%v", len(servers), err)
++	}
++}
++
++func TestHysteria2SingleLinkImport(t *testing.T) {
++	// test-protocols.sh provides an isolated configuration with lite=true.
++	defer db.DB().Close()
++	for _, link := range []string{"hysteria2://password@proxy.example:443#first", "hy2://other@proxy.example:8443#second"} {
++		if err := Import(link, nil); err != nil {
++			t.Fatal(err)
++		}
++	}
++	servers := configure.GetServers()
++	if len(servers) != 2 || servers[0].ServerObj.GetProtocol() != "hysteria2" || servers[1].ServerObj.GetName() != "second" {
++		t.Fatal("single URI was incorrectly handled as a subscription URL")
++	}
++}
+diff --git a/server/service/import.go b/server/service/import.go
+index 47bf9e0..1ae860f 100644
+--- a/server/service/import.go
++++ b/server/service/import.go
+@@ -41,7 +41,7 @@ func Import(url string, which *configure.Which) (err error) {
+ 		return err
+ 	}
+ 	supportedPrefix := []string{"vmess", "vless", "ss", "ssr", "trojan", "trojan-go", "http-proxy",
+-		"https-proxy", "socks5", "http2", "juicity", "tuic"}
++		"https-proxy", "socks5", "http2", "juicity", "tuic", "hysteria2", "hy2"}
+ 	for i := range supportedPrefix {
+ 		supportedPrefix[i] += "://"
+ 	}

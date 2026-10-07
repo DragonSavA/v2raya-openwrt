@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: Check shell syntax and installer scenarios
         run: |
-          bash -n scripts/build-standalone-ipk.sh scripts/verify-ipk.sh scripts/prepare-release.sh scripts/package-config.sh
+          bash -n scripts/build-standalone-ipk.sh scripts/build-xray-ipk.sh scripts/verify-ipk.sh scripts/prepare-release.sh scripts/package-config.sh scripts/test-protocols.sh scripts/test-native-xray.sh
           sh -n scripts/install-release.sh
           python3 scripts/tests/test-install-release.py
           if command -v busybox >/dev/null 2>&1; then
@@ -65,6 +65,15 @@ jobs:
         run: bash scripts/build-standalone-ipk.sh "$PACKAGE_ARCH"
         env:
           PACKAGE_ARCH: ${{ matrix.architecture }}
+      - name: Set up the pinned Xray Go toolchain
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.8"
+          cache-dependency-path: scripts/package-config.sh
+      - name: Build and verify Xray
+        run: bash scripts/build-xray-ipk.sh "$PACKAGE_ARCH"
+        env:
+          PACKAGE_ARCH: ${{ matrix.architecture }}
       - name: Store package
         uses: actions/upload-artifact@v5
         with:
@@ -74,8 +83,24 @@ jobs:
             artifacts/*.ipk.sha256
           if-no-files-found: error
 
+  compatibility:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: v2raya-x86_64
+          path: artifacts
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.21.13"
+          cache-dependency-path: scripts/package-config.sh
+      - name: Test native Xray, subscriptions and loopback TCP/UDP
+        run: bash scripts/test-native-xray.sh artifacts
+
   release:
-    needs: [prepare, build]
+    needs: [prepare, build, compatibility]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/legacy-2.2.7.5-memfix'
     runs-on: ubuntu-24.04
     permissions:
@@ -96,11 +121,12 @@ jobs:
           tag="v$full_version-${GITHUB_SHA:0:12}"
           bash scripts/prepare-release.sh artifacts "$tag" "$GITHUB_SHA"
           {
-            printf 'Legacy v2rayA %s with the GeoIP memory fix.\n\n' "$full_version"
+            printf 'Legacy v2rayA %s with the GeoIP memory fix and native Hysteria2; Xray %s.\n\n' "$full_version" "$xray_version"
             printf 'Source commit: [%s](https://github.com/%s/commit/%s).\n\n' "$GITHUB_SHA" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
             printf 'Install on the router using the instructions in [README](https://github.com/%s/blob/%s/README.md) or INSTALL-RU.md.\n\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA"
-            printf 'Requires opkg and the legacy iptables/firewall3 environment. The core and LuCI packages come from the original feed.\n\n'
-            printf 'Device testing is reported only for GL.iNet GL-MT3600BE (aarch64_cortex-a53). Other packages have build/ELF checks only.\n\n'
+            printf 'Requires opkg and iptables/firewall3. The installer upgrades v2raya and older Xray after configuration preflight; LuCI/dependencies remain from the original feed.\n\n'
+            printf 'WARNING: Xray 26.3.27 rejects allowInsecure=true after 2026-06-01. Correct TLS certificates/SNI before upgrading; see INSTALL-RU.md.\n\n'
+            printf 'The previous r2 was reported working on GL-MT3600BE. This r3 and Xray update has host tests; real-router testing remains necessary.\n\n'
             printf 'Packages:\n'
             awk -F '\t' '$1 == "package" { printf "- `%s` (%s)\n", $2, $7 }' artifacts/release-manifest.tsv
           } > artifacts/release-notes.md
