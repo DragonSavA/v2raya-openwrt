@@ -2,7 +2,28 @@
 
 Branch: `legacy-2.2.7.5-memfix`
 Patch base: `064365c5bbccd30febccb64cb3459f750d051627`.
-Updated: 2026-10-07.
+Updated: 2026-10-15.
+
+## r3 installer comparison fix
+
+- Fix base: `20e326c1d1f434397d14cf43aeb87de8572b87c8`.
+- The owner published r3 and reported successful router preflight, followed
+  by a false `The installed Xray version is too old` error and paired rollback.
+- OpenWrt opkg treats `>` as `>=`; strict greater-than is `>>`. The previous
+  mock incorrectly treated `>` as strict and missed the equal-version case.
+- All four installer comparisons now use `>>`; unreadable and genuinely old
+  installed versions have separate diagnostics and still trigger rollback.
+- The mock now models opkg relations, with regression scenarios for the
+  reported held-r2 upgrade plus duplicate-feed warnings, an existing exact
+  target Xray, the already-installed pair, and real invalid/old core output.
+- Package versions stay `2.2.7.5-r3` / `26.3.27-r1`; no backend/core source or
+  architecture/build changes are required. A push publishes a new commit tag
+  with the corrected installer through the existing workflow.
+- [x] 31 installer scenarios passed under /bin/sh and BusyBox ash, including
+  reproduction of the reported failure with the old installer. ShellCheck,
+  syntax and clean patch application checks passed before delivery.
+- [ ] Owner: push this fix, download the new Release installer, retry router
+  installation, then perform Hysteria2/previous-protocol and memory tests.
 
 ## Previous published state
 
@@ -33,8 +54,8 @@ Updated: 2026-10-07.
 - [x] Installer handles feed and held r2 upgrades, older/newer Xray,
   preflight without stopping the service, paired backup/rollback,
   architecture/checksum/metadata and service state.
-- [x] 26 installer scenarios passed under /bin/sh and BusyBox ash,
-  including core failure/rollback and non-root UID simulation.
+- [x] The original 26 installer scenarios ran under /bin/sh and BusyBox ash;
+  the incorrect opkg-comparison model is superseded by the fix above.
 - [x] README and Russian installation/testing/paired-rollback guide updated.
 - [x] ShellCheck, actionlint, syntax and complete 18-package manifest passed.
 - [x] Clean patch application check completed against the exact base commit.

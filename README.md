@@ -166,6 +166,13 @@ only after download and verification. Existing connections may disconnect
 during the upgrade. It restores both binaries, configuration and both opkg records if
 installation, binary startup or basic service restart fails.
 
+If the first r3 installer rolled back with `The installed Xray version is too
+old` after successfully installing Xray 26.3.27, download the installer again
+from the new completed Release and retry. The installer now uses opkg's strict
+`>>` comparison: a single `>` includes equality in OpenWrt opkg. Package
+versions remain `2.2.7.5-r3` / `26.3.27-r1`; this fix changes the installer and
+its tests. A rolled-back r2 installation does not need `--reinstall`.
+
 For manual rollback and post-install tests, see [INSTALL-RU.md](docs/INSTALL-RU.md).
 To allow a future feed upgrade deliberately, run `opkg flag ok v2raya` and `opkg flag ok xray-core`.
 

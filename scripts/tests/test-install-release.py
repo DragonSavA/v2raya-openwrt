@@ -30,6 +30,8 @@ if name == 'id':
         print(os.environ['TEST_UID']); sys.exit(0)
     sys.exit(2)
 if name == 'opkg':
+    if os.environ.get('TEST_DUPLICATE_SRC') == '1':
+        print('Collected errors:\n * opkg_conf_parse_file: Duplicate src declaration (v2raya https://downloads.sourceforge.net/project/v2raya/openwrt/aarch64_cortex-a53). Skipping.', file=sys.stderr)
     if args[0] == 'status':
         text = status_path.read_text()
         for block in text.split('\n\n'):
@@ -40,7 +42,14 @@ if name == 'opkg':
         print(os.environ['TEST_ARCHITECTURES']); sys.exit(0)
     if args[0] == 'compare-versions':
         values = lambda v: tuple(int(x) for x in re.findall(r'\d+', v))
-        sys.exit(0 if values(args[1]) > values(args[3]) else 1)
+        left, right = values(args[1]), values(args[3])
+        # OpenWrt opkg aliases > to >= and < to <=. Only >>/<< are strict.
+        # See openwrt/opkg-lede libopkg/pkg.c:pkg_version_satisfied.
+        relations = {'>': left >= right, '>=': left >= right, '>>': left > right,
+                     '<': left <= right, '<=': left <= right, '<<': left < right,
+                     '=': left == right}
+        if args[2] not in relations: sys.exit(2)
+        sys.exit(0 if relations[args[2]] else 1)
     if args[0] == 'install':
         with tarfile.open(args[-1], 'r:gz') as outer:
             data = outer.extractfile('./data.tar.gz').read()
@@ -51,6 +60,9 @@ if name == 'opkg':
         version = re.search(r'^Version: (.+)$', text, re.M)[1]
         with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as payload:
             payload.extractall(root, filter='data')
+        if package == 'xray-core' and os.environ.get('TEST_INSTALLED_XRAY_VERSION'):
+            binary = root / 'usr/bin/xray'
+            binary.write_text(binary.read_text().replace('Xray 26.3.27 OpenWrt', os.environ['TEST_INSTALLED_XRAY_VERSION']))
         if os.environ.get('TEST_FAIL_INSTALL') in ('1', package): sys.exit(1)
         text = status_path.read_text()
         blocks = text.split('\n\n')
@@ -247,6 +259,55 @@ exit 2
         self.assertIn('Version: ' + XRAY_VERSION, status.read_text())
         self.assertIn('opkg flag ok xray-core', self.calls())
         self.assertIn('opkg flag ok v2raya', self.calls())
+
+    def test_opkg_comparison_aliases_include_equality(self):
+        for version in ('26.3.27', XRAY_VERSION, VERSION):
+            for relation in ('>', '>=', '<', '<=', '=', '>>', '<<'):
+                with self.subTest(version=version, relation=relation):
+                    result = subprocess.run([str(self.root / 'bin/opkg'), 'compare-versions', version, relation, version], env=self.env)
+                    self.assertEqual(result.returncode, 1 if relation in ('>>', '<<') else 0)
+
+    def test_router_r2_upgrade_with_duplicate_feed_warning_completes(self):
+        status = self.root / 'usr/lib/opkg/status'
+        status.write_text(status.read_text().replace('2.2.7.4-r1', '2.2.7.5-r2').replace('Status: install user installed', 'Status: install hold installed'))
+        self.write('usr/bin/v2raya', "#!/bin/sh\necho '2.2.7.5'\n", executable=True)
+        self.write('running', '')
+        self.write('enabled', '')
+        self.env.update(TEST_CORE_RUNNING='1', TEST_DUPLICATE_SRC='1')
+        output = self.run_installer()
+        self.assertIn('Duplicate src declaration', output)
+        self.assertIn('Installed v2raya ' + VERSION + ' and Xray 26.3.27', output)
+        self.assertNotIn('Restoring the backup', output)
+        self.assertIn('Version: ' + VERSION, status.read_text())
+        self.assertIn('Version: ' + XRAY_VERSION, status.read_text())
+        self.assertTrue((self.root / 'running').exists())
+        self.assertTrue((self.root / 'enabled').exists())
+        self.assertEqual((self.root / 'etc/config/v2raya').read_text(), 'old UCI config\n')
+        self.assertEqual((self.root / 'etc/v2raya/database').read_text(), 'old database\n')
+
+    def test_current_xray_is_kept_when_only_v2raya_needs_update(self):
+        self.set_xray_current()
+        output = self.run_installer()
+        installs = [line for line in self.calls().splitlines() if line.startswith('opkg install')]
+        self.assertEqual(len(installs), 1)
+        self.assertIn('v2raya_', installs[0])
+        self.assertNotIn('xray-core_26.3.27-r1_', self.calls())
+        self.assertIn('and Xray 26.3.27', output)
+
+    def test_installed_older_xray_is_still_rejected_and_rolled_back(self):
+        self.env['TEST_INSTALLED_XRAY_VERSION'] = 'Xray 25.10.15 OpenWrt'
+        output = self.run_installer(ok=False)
+        self.assertIn('older than required 26.3.27', output)
+        self.assertIn('restored', output)
+        self.assertIn('25.10.15', (self.root / 'usr/bin/xray').read_text())
+        self.assertIn('2.2.7.4-r1', (self.root / 'usr/lib/opkg/status').read_text())
+
+    def test_unparseable_installed_xray_is_reported_and_rolled_back(self):
+        self.env['TEST_INSTALLED_XRAY_VERSION'] = 'unexpected version output'
+        output = self.run_installer(ok=False)
+        self.assertIn('Cannot determine the installed Xray binary version', output)
+        self.assertIn('unexpected version output', output)
+        self.assertIn('restored', output)
 
     def test_check_validates_actual_config_without_changes(self):
         self.write('etc/v2raya/config.json', '{"outbounds":[]}')

@@ -107,7 +107,8 @@ current_status="$(opkg status v2raya)" || fail 'Install v2raya from the original
 printf '%s\n' "$current_status" | grep -Eq '^Status: .* installed$' || fail 'Install v2raya from the original feed first.'
 current_version="$(printf '%s\n' "$current_status" | sed -n 's/^Version: //p')"
 [ -n "$current_version" ] || fail 'Cannot determine the installed version.'
-if opkg compare-versions "$current_version" '>' "$version"; then
+# OpenWrt opkg treats > as >= for compatibility. Use >> for strict ordering.
+if opkg compare-versions "$current_version" '>>' "$version"; then
 	leave_feed "Installed $current_version is newer than $version; downgrades are not automatic."
 fi
 
@@ -181,9 +182,9 @@ printf '%s\n' "$xray_status" | grep -Eq '^Status: .* installed$' || fail 'Instal
 current_xray="$(awk 'NR == 1 && $1 == "Xray" { print $2 }' "$work_dir/current-xray-version")"
 printf '%s\n' "$current_xray" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || fail 'Cannot determine the actual Xray binary version.'
 need_xray=0
-if opkg compare-versions "$xray_version" '>' "$current_xray"; then need_xray=1; fi
+if opkg compare-versions "$xray_version" '>>' "$current_xray"; then need_xray=1; fi
 current_xray_package="$(printf '%s\n' "$xray_status" | sed -n 's/^Version: //p')"
-if [ "$need_xray" -eq 1 ] && opkg compare-versions "$current_xray_package" '>' "$xray_package_version"; then
+if [ "$need_xray" -eq 1 ] && opkg compare-versions "$current_xray_package" '>>' "$xray_package_version"; then
   fail 'Xray binary and opkg version disagree; resolve this before upgrading.'
 fi
 need_v2raya=1
@@ -344,8 +345,12 @@ if [ "$need_v2raya" -eq 1 ]; then
 fi
 "$router_root/usr/bin/xray" version > "$work_dir/new-xray-version" 2>&1 || fail 'The installed Xray binary cannot run.'
 new_xray="$(awk 'NR == 1 && $1 == "Xray" { print $2 }' "$work_dir/new-xray-version")"
-if [ -z "$new_xray" ] || opkg compare-versions "$xray_version" '>' "$new_xray"; then
-  fail 'The installed Xray version is too old.'
+if ! printf '%s\n' "$new_xray" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  cat "$work_dir/new-xray-version" >&2
+  fail 'Cannot determine the installed Xray binary version.'
+fi
+if opkg compare-versions "$xray_version" '>>' "$new_xray"; then
+  fail "Installed Xray $new_xray is older than required $xray_version."
 fi
 
 opkg status v2raya | grep -qx "Version: $version" || fail 'opkg did not install the expected version.'
