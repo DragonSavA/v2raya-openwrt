@@ -1,12 +1,14 @@
 # v2raya-openwrt: legacy GeoIP memory fix and native Hysteria2
 
-This branch provides **v2rayA 2.2.7.5-r3** for OpenWrt 21.02 and compatible
+This branch provides **v2rayA 2.2.7.5-r4** for OpenWrt 21.02 and compatible
 vendor firmware using **opkg and iptables/firewall3**. It backports the
 incremental GeoIP parser from [upstream PR #1933](https://github.com/v2rayA/v2rayA/pull/1933)
 to reduce peak memory use when reading `geoip.dat`. It retains the UCI,
 procd and LuCI integration. A second backend patch adds **native Hysteria2
 through Xray 26.3.27+**, without an auxiliary proxy process. Releases include
 **Xray 26.3.27-r1**, built from unmodified upstream source with Go 1.26.8.
+The r4 parser fix accepts S-UI's `security=tls` and `fp` Hysteria2 URL
+parameters, which r3 incorrectly rejected.
 
 [Русская инструкция: установка и откат](docs/INSTALL-RU.md) ·
 [GL-MT3600BE testing guide](docs/GL-MT3600BE-RU.md) ·
@@ -24,7 +26,7 @@ The installer picks the supported architecture with the highest opkg priority.
 
 | opkg architecture | Go target | Device testing |
 | --- | --- | --- |
-| `aarch64_cortex-a53` | ARM64 | Previous r2 worked on GL-MT3600BE; r3 needs device testing |
+| `aarch64_cortex-a53` | ARM64 | Owner reports r3/Xray running on GL-MT3600BE; r4 Hysteria2 test pending |
 | `aarch64_generic` | ARM64 | Build/ELF checks only |
 | `aarch64_cortex-a72` | ARM64 | Build/ELF checks only |
 | `arm_cortex-a7_neon-vfpv4` | ARMv7 | Build/ELF checks only |
@@ -34,7 +36,8 @@ The installer picks the supported architecture with the highest opkg priority.
 | `mipsel_74kc` | MIPS32, little endian, soft float | Build/ELF checks only |
 | `x86_64` | AMD64 v1 | Build/ELF checks only |
 
-All r3 packages have build/ELF checks; the previous router report concerns r2.
+All release packages have build/ELF checks. The router report confirms r3
+startup and versions; its Hysteria2 links were rejected before this r4 fix.
 Host integration tests validate Xray configuration and TCP/UDP over trusted
 TLS for Hysteria2, Salamander, Trojan and VLESS WS+TLS. TUIC retains its
 existing in-process client and SOCKS outbound. These tests do not replace
@@ -43,11 +46,16 @@ real-router, transparent-proxy, server or memory tests.
 ## Hysteria2 and Xray compatibility
 
 Import a `hysteria2://` or `hy2://` URL, or refresh an existing S-UI URI/base64
-subscription in the WebUI. Supported S-UI options: `sni`, ALPN `h3`,
+subscription in the WebUI. Supported S-UI options: `security=tls`, `sni`, ALPN `h3`,
 `obfs=salamander`, `obfs-password`, `mport` (single ports/ranges), and decimal
 `upmbps`/`downmbps`. Authentication, IPv6, escaped passwords, sharing and
 stored subscriptions are supported. TCP Fast Open in S-UI links has no
-QUIC effect. Hysteria v1, AnyTLS, Naive and Snell are not added.
+QUIC effect. The optional `fp` value (for example, `fp=android`) is preserved
+in storage and exported links, but does not enable TLS fingerprint emulation:
+Xray's native Hysteria2 QUIC client uses
+[standard Go TLS](https://github.com/XTLS/Xray-core/blob/v26.3.27/transport/internet/hysteria/dialer.go), not uTLS.
+Absent `security` also means TLS; other security modes and unknown URL
+parameters remain rejected. Hysteria v1, AnyTLS, Naive and Snell are not added.
 
 The unchanged embedded legacy WebUI has no dedicated Hysteria2 manual-edit
 form. Use Import/subscriptions to add a node and reimport an edited URL to
@@ -124,19 +132,19 @@ fork Release must exist before step 4; check the Releases link above.
    The installer downloads the matching IPK from a specific release tag,
    checks the SHA-256 and metadata of both packages, tests the candidate core,
    saves a persistent backup under `/root/v2raya-backups/`, and installs
-   `2.2.7.5-r3` plus Xray `26.3.27-r1` when the installed Xray is older. It warns before
+   `2.2.7.5-r4` plus Xray `26.3.27-r1` when the installed Xray is older. It warns before
    installing an architecture without real-router testing. If the environment
    or architecture is unsupported, it reports this and leaves the feed
    version in place. Download/checksum errors abort before stopping the service.
-   A feed version newer than `2.2.7.5-r3` is not downgraded automatically.
+   A feed version newer than `2.2.7.5-r4` is not downgraded automatically.
 
    The installer preserves the previous running/stopped and boot enablement states and sets
    `opkg flag hold v2raya` and `opkg flag hold xray-core` after success,
    so feed upgrades do not silently replace the tested pair. The package version is unchanged for rebuilds: use
    `sh /tmp/install-v2raya-release.sh --reinstall` to install another release
-   of `2.2.7.5-r3` explicitly. Use `--check` to download/verify and test Xray compatibility without
+   of `2.2.7.5-r4` explicitly. Use `--check` to download/verify and test Xray compatibility without
    replacing packages or stopping the service. Download the new installer
-   even if a previous r2 installer is still in `/tmp`.
+   even if a previous r2/r3 installer is still in `/tmp`.
 
 5. Confirm the installed version, then enable the service:
 
@@ -150,7 +158,7 @@ fork Release must exist before step 4; check the Releases link above.
    /etc/init.d/v2raya start
    ```
 
-   Expect `Version: 2.2.7.5-r3` in opkg status. Open
+   Expect `Version: 2.2.7.5-r4` in opkg status. Open
    `http://<router-ip>/cgi-bin/luci/admin/services/v2raya` and the v2rayA
    WebUI at `http://<router-ip>:2017`, then configure your servers and routing.
    If step 4 reported an unsupported architecture, these commands start the
@@ -158,20 +166,23 @@ fork Release must exist before step 4; check the Releases link above.
 
 ## Updating an existing installation
 
-From feed `2.2.7.4-r1` or our `2.2.7.5-r2`, run step 4 above; do not reinstall
-the feed packages. A held r2 package is handled automatically. Keep LuCI
+From feed `2.2.7.4-r1` or our `2.2.7.5-r2`/`2.2.7.5-r3`, run step 4 above; do not reinstall
+the feed packages. Held packages are handled automatically. Keep LuCI
 and firmware-specific dependencies. The installer
 preserves `/etc/config/v2raya` and `/etc/v2raya`; it stops a running service
 only after download and verification. Existing connections may disconnect
 during the upgrade. It restores both binaries, configuration and both opkg records if
 installation, binary startup or basic service restart fails.
 
-If the first r3 installer rolled back with `The installed Xray version is too
-old` after successfully installing Xray 26.3.27, download the installer again
-from the new completed Release and retry. The installer now uses opkg's strict
-`>>` comparison: a single `>` includes equality in OpenWrt opkg. Package
-versions remain `2.2.7.5-r3` / `26.3.27-r1`; this fix changes the installer and
-its tests. A rolled-back r2 installation does not need `--reinstall`.
+For **r3 → r4**, download the new installer after the r4 Release completes.
+Run `--check`, then run it normally; `--reinstall` is not required. An existing
+working Xray 26.3.27 is checked and kept. **Refresh the S-UI subscription after
+upgrading** (or import the Hysteria2 URL again): nodes rejected by r3 were
+never saved and cannot appear just by restarting v2rayA.
+
+The earlier r3 installer comparison fix is retained: opkg's strict comparison
+is `>>`, while `>` includes equality. If an earlier installer rolled back,
+use the newly downloaded installer rather than the old copy in `/tmp`.
 
 For manual rollback and post-install tests, see [INSTALL-RU.md](docs/INSTALL-RU.md).
 To allow a future feed upgrade deliberately, run `opkg flag ok v2raya` and `opkg flag ok xray-core`.
@@ -180,7 +191,7 @@ To allow a future feed upgrade deliberately, run `opkg flag ok v2raya` and `opkg
 
 Every push to `legacy-2.2.7.5-memfix` runs the architecture matrix. After all
 packages pass verification, GitHub Actions publishes a Release with a
-commit-specific tag `v2.2.7.5-r3-<12-character-commit>`, all **18 IPKs** (two per architecture),
+commit-specific tag `v2.2.7.5-r4-<12-character-commit>`, all **18 IPKs** (two per architecture),
 per-package SHA-256 files, `SHA256SUMS`, a manifest, the installer and the
 Russian guide. Failed/incomplete matrices or failed host TCP/UDP compatibility tests are not published. Re-running an
 already published commit leaves its release assets intact.
@@ -198,7 +209,7 @@ the first two commands:
 bash scripts/build-standalone-ipk.sh mipsel_24kc
 # Switch PATH to Go 1.26.8:
 bash scripts/build-xray-ipk.sh mipsel_24kc
-bash scripts/verify-ipk.sh artifacts/v2raya_2.2.7.5-r3_mipsel_24kc.ipk mipsel_24kc
+bash scripts/verify-ipk.sh artifacts/v2raya_2.2.7.5-r4_mipsel_24kc.ipk mipsel_24kc
 python3 scripts/tests/test-install-release.py
 # With both x86_64 IPKs built and Go 1.21.13 selected:
 bash scripts/test-native-xray.sh artifacts

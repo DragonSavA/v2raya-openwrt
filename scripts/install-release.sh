@@ -4,7 +4,7 @@ set -eu
 umask 077
 
 repository='DragonSavA/v2raya-openwrt'
-version='2.2.7.5-r3'
+version='2.2.7.5-r4'
 xray_version='26.3.27'
 xray_package_version='26.3.27-r1'
 check_only=0
@@ -193,7 +193,7 @@ log "Release: $tag; architecture: $arch; v2raya: $current_version -> $version; X
 if [ "$arch" != aarch64_cortex-a53 ]; then
   log "WARNING: $arch has build/ELF checks only. It has not been tested on a real router."
 else
-  log 'The previous r2 worked on GL-MT3600BE. This r3/Hysteria2/Xray update still needs a router test.'
+  log 'The owner reports r3 and Xray 26.3.27 running on GL-MT3600BE. This r4 Hysteria2 import fix still needs a router test.'
 fi
 if [ -x "$router_root/etc/init.d/xray" ] && "$router_root/etc/init.d/xray" running >/dev/null 2>&1; then
   fail 'An independent Xray service is running. Stop it for maintenance before updating the shared binary.'

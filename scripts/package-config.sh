@@ -2,7 +2,7 @@
 # Shared by the host-side scripts. The caller supplies repo_root and uses
 # the constants and architecture variables defined here.
 readonly package_version="2.2.7.5"
-readonly package_release="3"
+readonly package_release="4"
 readonly full_version="$package_version-r$package_release"
 readonly source_hash="d0daccace51572d730fb710f7df190beed47d51ec1091d2fba38719b9417b385"
 readonly web_hash="89bff9248a9cba8b7bda6e1202ac565dbca377319423868835235deddbfb182a"

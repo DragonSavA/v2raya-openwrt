@@ -1,0 +1,180 @@
+diff --git a/core/serverObj/hysteria2.go b/core/serverObj/hysteria2.go
+index 0a405a6..d4d9a15 100644
+--- a/core/serverObj/hysteria2.go
++++ b/core/serverObj/hysteria2.go
+@@ -29,6 +29,7 @@ type Hysteria2 struct {
+ 	Password      string `json:"password"`
+ 	Sni           string `json:"sni"`
+ 	Alpn          string `json:"alpn,omitempty"`
++	Fingerprint   string `json:"fingerprint,omitempty"`
+ 	AllowInsecure bool   `json:"allowInsecure"`
+ 	Obfs          string `json:"obfs,omitempty"`
+ 	ObfsPassword  string `json:"obfsPassword,omitempty"`
+@@ -51,10 +52,18 @@ func ParseHysteria2URL(link string) (*Hysteria2, error) {
+ 	if err != nil {
+ 		return nil, fmt.Errorf("invalid Hysteria2 query")
+ 	}
++	// Hysteria2 always uses TLS. Check every occurrence so a conflicting
++	// duplicate cannot silently request another transport security mode.
++	for _, security := range q["security"] {
++		if security != "" && !strings.EqualFold(security, "tls") {
++			return nil, fmt.Errorf("Hysteria2 requires security=tls")
++		}
++	}
+ 	s := &Hysteria2{
+ 		Name: u.Fragment, Server: u.Hostname(), Port: 443, Protocol: "hysteria2",
+ 		Password: u.User.Username(), Sni: q.Get("sni"), Alpn: q.Get("alpn"),
+-		Obfs: strings.ToLower(q.Get("obfs")), ObfsPassword: q.Get("obfs-password"), Ports: strings.ReplaceAll(q.Get("mport"), ":", "-"),
++		Fingerprint: q.Get("fp"),
++		Obfs:        strings.ToLower(q.Get("obfs")), ObfsPassword: q.Get("obfs-password"), Ports: strings.ReplaceAll(q.Get("mport"), ":", "-"),
+ 	}
+ 	if password, ok := u.User.Password(); ok {
+ 		s.Password += ":" + password
+@@ -82,11 +91,13 @@ func ParseHysteria2URL(link string) (*Hysteria2, error) {
+ 			}
+ 		}
+ 	}
+-	// TCP Fast Open has no effect on QUIC. S-UI includes fastopen in its links.
++	// S-UI reuses TLS URL options across protocols. Xray's native QUIC
++	// client uses crypto/tls, not uTLS: preserve fp for sharing/storage only.
++	// TCP Fast Open has no effect on QUIC.
+ 	// Never silently discard options that change TLS verification or routing.
+ 	for key := range q {
+ 		switch key {
+-		case "sni", "alpn", "insecure", "allowInsecure", "obfs", "obfs-password", "mport", "upmbps", "downmbps", "fastopen":
++		case "security", "fp", "sni", "alpn", "insecure", "allowInsecure", "obfs", "obfs-password", "mport", "upmbps", "downmbps", "fastopen":
+ 		default:
+ 			return nil, fmt.Errorf("unsupported Hysteria2 URL parameter: %s", key)
+ 		}
+@@ -211,7 +222,8 @@ func (s *Hysteria2) Configuration(info PriorInfo) (Configuration, error) {
+ func (s *Hysteria2) ExportToURL() string {
+ 	u := &url.URL{Scheme: "hysteria2", User: url.User(s.Password), Host: net.JoinHostPort(s.Server, strconv.Itoa(s.Port)), Fragment: s.Name}
+ 	q := url.Values{}
+-	for key, value := range map[string]string{"sni": s.Sni, "alpn": s.Alpn, "obfs": s.Obfs, "obfs-password": s.ObfsPassword, "mport": s.Ports} {
++	q.Set("security", "tls")
++	for key, value := range map[string]string{"fp": s.Fingerprint, "sni": s.Sni, "alpn": s.Alpn, "obfs": s.Obfs, "obfs-password": s.ObfsPassword, "mport": s.Ports} {
+ 		setValue(&q, key, value)
+ 	}
+ 	if s.AllowInsecure {
+diff --git a/core/serverObj/hysteria2_test.go b/core/serverObj/hysteria2_test.go
+index ce47c2e..d5c7eff 100644
+--- a/core/serverObj/hysteria2_test.go
++++ b/core/serverObj/hysteria2_test.go
+@@ -9,7 +9,7 @@ import (
+ )
+ 
+ func TestHysteria2SUIAndExport(t *testing.T) {
+-	link := "hysteria2://user%3Ap%40ss%2B%25@[2001:db8::1]:443/?sni=proxy.example&alpn=h3&obfs=salamander&obfs-password=secret%2B%25&mport=443,10000-10010&upmbps=20&downmbps=80&fastopen=0#S-UI%20H2"
++	link := "hysteria2://user%3Ap%40ss%2B%25@[2001:db8::1]:443/?security=tls&fp=android&sni=proxy.example&alpn=h3&obfs=salamander&obfs-password=secret%2B%25&mport=443,10000-10010&upmbps=20&downmbps=80&fastopen=0#S-UI%20H2"
+ 	s, err := ParseHysteria2URL(link)
+ 	if err != nil {
+ 		t.Fatal(err)
+@@ -49,8 +49,39 @@ func TestHysteria2SUIAndExport(t *testing.T) {
+ 	}
+ }
+ 
++func TestHysteria2SUIReportedURL(t *testing.T) {
++	// Same option set and Unicode name as the report, with synthetic secrets.
++	link := "hysteria2://test%3Apass%40word@proxy.example:8443?security=tls&fp=android&sni=proxy.example&alpn=h3&obfs=salamander&obfs-password=sal%2B%25&fastopen=0#%5B%F0%9F%87%B7%F0%9F%87%BA%E2%86%92%F0%9F%87%A9%F0%9F%87%AA%5DDragoNet_HysDEric_Services ♾"
++	s, err := ParseHysteria2URL(link)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if s.Password != "test:pass@word" || s.ObfsPassword != "sal+%" || s.Name != "[🇷🇺→🇩🇪]DragoNet_HysDEric_Services ♾" {
++		t.Fatal("S-UI credentials or Unicode name decoded incorrectly")
++	}
++	u := s.ExportToURL()
++	if !strings.Contains(u, "fp=android") || !strings.Contains(u, "security=tls") {
++		t.Fatal("sharing URL lost TLS metadata")
++	}
++	c, err := s.Configuration(PriorInfo{Variant: where.Xray, CoreVersion: "26.3.27"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	b, err := json.Marshal(c.CoreOutbound)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if strings.Contains(string(b), "fingerprint") || strings.Contains(string(b), "android") {
++		t.Fatal("QUIC must use native TLS, not an unsupported uTLS fingerprint")
++	}
++	stream := c.CoreOutbound.StreamSettings
++	if stream.Security != "tls" || stream.TLSSettings.AllowInsecure || stream.TLSSettings.ServerName != "proxy.example" || len(stream.TLSSettings.Alpn) != 1 || stream.TLSSettings.Alpn[0] != "h3" {
++		t.Fatal("S-UI metadata changed certificate verification, SNI or ALPN")
++	}
++}
++
+ func TestHysteria2AliasDefaultAndAuth(t *testing.T) {
+-	for _, link := range []string{"hy2://user:password@proxy.example", "hysteria2://user%3Apassword@proxy.example:443"} {
++	for _, link := range []string{"hy2://user:password@proxy.example", "hysteria2://user%3Apassword@proxy.example:443", "hy2://user:password@proxy.example?security=tls&security=TLS"} {
+ 		s, err := ParseHysteria2URL(link)
+ 		if err != nil {
+ 			t.Fatal(err)
+@@ -84,7 +115,7 @@ func TestHysteria2CoreAndTLSGuard(t *testing.T) {
+ 		}
+ 	}
+ 	for _, flag := range []string{"insecure=1", "insecure=true", "allowInsecure=1", "allowInsecure=true"} {
+-		s, err := ParseHysteria2URL("hy2://password@proxy.example:443?" + flag)
++		s, err := ParseHysteria2URL("hy2://password@proxy.example:443?security=tls&fp=android&" + flag)
+ 		if err != nil {
+ 			t.Fatal(err)
+ 		}
+@@ -98,7 +129,7 @@ func TestHysteria2CoreAndTLSGuard(t *testing.T) {
+ }
+ 
+ func TestHysteria2RejectsUnsupportedOrInvalidOptions(t *testing.T) {
+-	for _, suffix := range []string{"?obfs=unknown", "?obfs=salamander", "?obfs-password=x", "?insecure=maybe", "?alpn=h2", "?upmbps=-1", "?downmbps=bad", "?pinSHA256=x", "?mport=0", "?mport=65536", "?mport=10-1", "?mport=1,,2", "?sni=%ZZ", "/other/path"} {
++	for _, suffix := range []string{"?security=none", "?security=reality", "?security=tls&security=none", "?security=none&security=tls", "?obfs=unknown", "?obfs=salamander", "?obfs-password=x", "?insecure=maybe", "?alpn=h2", "?upmbps=-1", "?downmbps=bad", "?pinSHA256=x", "?mport=0", "?mport=65536", "?mport=10-1", "?mport=1,,2", "?sni=%ZZ", "/other/path"} {
+ 		if _, err := ParseHysteria2URL("hy2://password@proxy.example:443" + suffix); err == nil {
+ 			t.Fatalf("accepted invalid/unsupported URL suffix: %s", suffix)
+ 		}
+diff --git a/core/serverObj/xray_native_test.go b/core/serverObj/xray_native_test.go
+index 6b3d3e6..0c7a12d 100644
+--- a/core/serverObj/xray_native_test.go
++++ b/core/serverObj/xray_native_test.go
+@@ -22,8 +22,8 @@ func TestNativeXrayConfigCompatibility(t *testing.T) {
+ 		"trojan://password@proxy.example:443?sni=proxy.example&type=tcp&allowInsecure=false",
+ 		"vless://11111111-1111-4111-8111-111111111111@proxy.example:443?type=ws&security=tls&sni=proxy.example&host=proxy.example&path=%2Fws&encryption=none",
+ 		"tuic://11111111-1111-4111-8111-111111111111:password@proxy.example:443?alpn=h3&congestion_control=bbr",
+-		"hysteria2://password@proxy.example:443?sni=proxy.example",
+-		"hy2://password@proxy.example:443?sni=proxy.example&obfs=salamander&obfs-password=secret&upmbps=20&downmbps=80&mport=443,10000-10010",
++		"hysteria2://password@proxy.example:443?security=tls&fp=android&sni=proxy.example&alpn=h3&fastopen=0",
++		"hy2://password@proxy.example:443?security=tls&fp=android&sni=proxy.example&alpn=h3&obfs=salamander&obfs-password=secret&upmbps=20&downmbps=80&mport=443,10000-10010&fastopen=0",
+ 	}
+ 	for i, link := range links {
+ 		scheme := strings.SplitN(link, ":", 2)[0]
+diff --git a/db/configure/hysteria2_test.go b/db/configure/hysteria2_test.go
+index a997960..289c79d 100644
+--- a/db/configure/hysteria2_test.go
++++ b/db/configure/hysteria2_test.go
+@@ -8,7 +8,7 @@ import (
+ )
+ 
+ func TestHysteria2StoredServerAndSubscription(t *testing.T) {
+-	obj, err := serverObj.NewFromLink("hy2", "hy2://p%40ss@proxy.example:443?obfs=salamander&obfs-password=test&mport=443,5000-5010#node")
++	obj, err := serverObj.NewFromLink("hy2", "hy2://p%40ss@proxy.example:443?security=tls&fp=android&obfs=salamander&obfs-password=test&mport=443,5000-5010#node")
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+diff --git a/server/service/hysteria2_test.go b/server/service/hysteria2_test.go
+index a236e98..2d95eef 100644
+--- a/server/service/hysteria2_test.go
++++ b/server/service/hysteria2_test.go
+@@ -11,7 +11,7 @@ import (
+ )
+ 
+ func TestHysteria2PlainAndBase64Subscription(t *testing.T) {
+-	links := "hysteria2://password@proxy.example:443?sni=proxy.example&fastopen=0#first\nhy2://other@[2001:db8::1]:8443#second\n"
++	links := "hysteria2://password@proxy.example:443?security=tls&fp=android&sni=proxy.example&alpn=h3&obfs=salamander&obfs-password=secret&fastopen=0#%5B%F0%9F%87%B7%F0%9F%87%BA%E2%86%92%F0%9F%87%A9%F0%9F%87%AA%5DDragoNet_HysDEric_Services ♾\nhy2://other@[2001:db8::1]:8443?security=tls&fp=android#second\n"
+ 	servers, _, err := ResolveByLines(links)
+ 	if err != nil || len(servers) != 2 {
+ 		t.Fatalf("plain subscription: servers=%d, err=%v", len(servers), err)
+@@ -34,7 +34,7 @@ func TestHysteria2PlainAndBase64Subscription(t *testing.T) {
+ func TestHysteria2SingleLinkImport(t *testing.T) {
+ 	// test-protocols.sh provides an isolated configuration with lite=true.
+ 	defer db.DB().Close()
+-	for _, link := range []string{"hysteria2://password@proxy.example:443#first", "hy2://other@proxy.example:8443#second"} {
++	for _, link := range []string{"hysteria2://password@proxy.example:443?security=tls&fp=android#first", "hy2://other@proxy.example:8443?security=tls&fp=android#second"} {
+ 		if err := Import(link, nil); err != nil {
+ 			t.Fatal(err)
+ 		}

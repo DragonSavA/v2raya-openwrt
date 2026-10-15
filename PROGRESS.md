@@ -1,10 +1,43 @@
 # Legacy fork progress / continuation checkpoint
 
 Branch: `legacy-2.2.7.5-memfix`
-Patch base: `064365c5bbccd30febccb64cb3459f750d051627`.
+Current patch base: `caa48b4e39c2428f7733434b9712f86f15606a21`.
 Updated: 2026-10-15.
 
-## r3 installer comparison fix
+## Current r4: S-UI Hysteria2 URL parameters
+
+- The owner installed r3 and Xray 26.3.27 successfully after clearing old
+  backup files. Hysteria2 profiles were still rejected at import because
+  the strict URL whitelist omitted S-UI's `security=tls` and `fp=android`.
+- [x] Reproduce the reported URL failure in a regression test with synthetic
+  secrets, the same query options, Unicode flags and a literal space.
+- [x] Add `030-hysteria2-sui-tls-params.patch`: accept TLS explicitly, reject
+  other/conflicting security modes, preserve optional fingerprint metadata
+  through database and sharing, and keep native QUIC TLS unchanged.
+- `fp` does not enable uTLS emulation in Xray's native Hysteria2 transport.
+  Certificate verification, SNI/h3, Salamander, bandwidth/hopping guards and
+  rejection of other unknown options are retained.
+- [x] Bump v2raya package release and installer to `2.2.7.5-r4`. Keep Xray
+  `26.3.27-r1`, both Go pins, nine architectures and the existing release CI.
+- [x] Go URI/import/plain and base64 subscription/database tests passed.
+- [x] Real upstream Xray 26.3.27 executable (verified release SHA-256) accepts
+  all fixtures. Local TCP/UDP passed for Hysteria2, Salamander, Trojan and
+  VLESS WS+TLS; TUIC's unchanged SOCKS outbound passes config validation.
+- [x] All 32 installer scenarios passed under /bin/sh and BusyBox ash,
+  including held-r3 -> r4 without re-downloading/replacing current Xray.
+- [x] ShellCheck and Bash/sh/BusyBox syntax checks passed.
+- [x] All nine r4 v2raya IPK builds and static ELF checks passed.
+- [x] Clean patch application checked against the exact base.
+- [x] Downloadable patch and Russian upgrade/test memo prepared.
+
+The production change is confined to the Hysteria2 parser, persisted
+fingerprint metadata and URL export. No helper daemon or core fork is added.
+The remaining router test must refresh the subscription after upgrading:
+nodes rejected by r3 were never saved. No local test contacts the owner's
+servers. Existing CI rebuilds both packages and publishes only after its
+matrix and native-Xray compatibility job succeed.
+
+## r3 installer comparison fix (historical)
 
 - Fix base: `20e326c1d1f434397d14cf43aeb87de8572b87c8`.
 - The owner published r3 and reported successful router preflight, followed
@@ -22,8 +55,8 @@ Updated: 2026-10-15.
 - [x] 31 installer scenarios passed under /bin/sh and BusyBox ash, including
   reproduction of the reported failure with the old installer. ShellCheck,
   syntax and clean patch application checks passed before delivery.
-- [ ] Owner: push this fix, download the new Release installer, retry router
-  installation, then perform Hysteria2/previous-protocol and memory tests.
+- [x] Owner installed the corrected r3 and Xray successfully. Hysteria2
+  URL rejection is handled by r4 above; real Hysteria2/memory tests remain.
 
 ## Previous published state
 
@@ -61,18 +94,22 @@ Updated: 2026-10-15.
 - [x] Clean patch application check completed against the exact base commit.
 - [x] Downloadable patch and memo prepared; no remote commit/push performed.
 
-## Owner actions after applying the patch
+## Owner actions after applying the r4 patch
 
 - [ ] Commit/push on the existing branch; wait for prepare, nine paired
   build jobs, host compatibility and Release to pass.
 - [ ] Confirm 18 IPKs, checksum files, manifest format 2 and new installer.
 - [ ] Resolve incompatible saved TLS settings before updating the router.
-- [ ] Download the r3 installer afresh; run --check, then install.
+- [ ] Download the r4 installer afresh; run --check, then install without
+  --reinstall. An installed working Xray 26.3.27 is kept.
+- [ ] Refresh S-UI subscription or reimport the previously rejected URL;
+  confirm security=tls/fp links, Unicode names, persistence and sharing.
 - [ ] Test the previous protocols and Hysteria2 against the real S-UI
   servers, transparent proxy/DNS, restart/reboot, hopping and memory.
 - [ ] Record 24–72 hours of normal memory/connection behavior.
 
-No real-router r3 or S-UI server test has been performed here. TUIC's native
+The owner confirmed r3/Xray startup; no r4 real-router or S-UI server test
+has been performed here. TUIC's native
 client implementation is unchanged; its SOCKS link to the new core is checked.
 Hopping is validated as Xray configuration, not as real-server packet traffic.
 Inactive nodes outside the saved core config need individual tests.

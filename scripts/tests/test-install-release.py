@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 REPO = Path(__file__).resolve().parents[2]
-VERSION = "2.2.7.5-r3"
+VERSION = "2.2.7.5-r4"
 XRAY_VERSION = "26.3.27-r1"
 COMMIT = "a" * 40
 TAG = "v" + VERSION + "-" + COMMIT[:12]
@@ -293,6 +293,29 @@ exit 2
         self.assertIn('v2raya_', installs[0])
         self.assertNotIn('xray-core_26.3.27-r1_', self.calls())
         self.assertIn('and Xray 26.3.27', output)
+
+    def test_held_r3_upgrades_to_r4_without_replacing_current_xray(self):
+        status = self.root / 'usr/lib/opkg/status'
+        status.write_text(status.read_text().replace('2.2.7.4-r1', '2.2.7.5-r3').replace('Status: install user installed', 'Status: install hold installed'))
+        self.set_xray_current()
+        self.write('usr/bin/v2raya', "#!/bin/sh\necho '2.2.7.5'\n", executable=True)
+        self.write('running', '')
+        self.write('enabled', '')
+        self.env['TEST_CORE_RUNNING'] = '1'
+        old_xray = (self.root / 'usr/bin/xray').read_bytes()
+        output = self.run_installer()
+        installs = [line for line in self.calls().splitlines() if line.startswith('opkg install')]
+        self.assertEqual(len(installs), 1)
+        self.assertIn('v2raya_' + VERSION, installs[0])
+        self.assertNotIn('xray-core_26.3.27-r1_', self.calls())
+        self.assertEqual((self.root / 'usr/bin/xray').read_bytes(), old_xray)
+        self.assertIn('Version: ' + VERSION, status.read_text())
+        self.assertEqual(status.read_text().count('Status: install hold installed'), 2)
+        self.assertIn('Installed v2raya ' + VERSION, output)
+        self.assertTrue((self.root / 'running').exists())
+        self.assertTrue((self.root / 'enabled').exists())
+        self.assertEqual((self.root / 'etc/config/v2raya').read_text(), 'old UCI config\n')
+        self.assertEqual((self.root / 'etc/v2raya/database').read_text(), 'old database\n')
 
     def test_installed_older_xray_is_still_rejected_and_rolled_back(self):
         self.env['TEST_INSTALLED_XRAY_VERSION'] = 'Xray 25.10.15 OpenWrt'
